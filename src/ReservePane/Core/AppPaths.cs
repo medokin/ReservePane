@@ -10,6 +10,9 @@ public sealed record AppPaths(
     string SettingsPath,
     string LogPath)
 {
+    public string OllamaPrivateKeyPath { get; init; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ollama", "id_ed25519");
+
     public static AppPaths FromEnvironment()
     {
         string userProfile = Environment.GetEnvironmentVariable("USERPROFILE")
@@ -28,6 +31,9 @@ public sealed record AppPaths(
             Path.Combine(userProfile, ".local", "share", "opencode", "auth.json"),
             Path.Combine(grokDirectory, "auth.json"),
             Path.Combine(applicationDirectory, "settings.json"),
-            Path.Combine(applicationDirectory, "log.txt"));
+            Path.Combine(applicationDirectory, "log.txt"))
+        {
+            OllamaPrivateKeyPath = Path.Combine(userProfile, ".ollama", "id_ed25519"),
+        };
     }
 }

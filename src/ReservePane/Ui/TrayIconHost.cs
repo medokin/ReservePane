@@ -141,10 +141,13 @@ internal interface ITrayIconView : IDisposable
 
 internal interface IStatusWindow
 {
+    event EventHandler? RefreshRequested;
+    event EventHandler? CloseRequested;
     bool IsVisible { get; }
     void Show();
     void Hide();
     void SetProviders(IEnumerable<ProviderSnapshot> providers, TimeSpan activePollInterval);
+    void SetRefreshing(bool refreshing);
 }
 
 internal interface IOverlayStatusWindow : IStatusWindow
@@ -155,6 +158,8 @@ internal interface IOverlayStatusWindow : IStatusWindow
 internal interface IStatusReportSource
 {
     event EventHandler<StatusReport>? ReportUpdated;
+    event EventHandler<bool>? RefreshStateChanged;
+    bool IsRefreshing { get; }
 }
 
 internal interface IProcessLauncher
@@ -204,6 +209,14 @@ internal sealed class StatusPollerReportSource(StatusPoller poller) : IStatusRep
     {
         add => _poller.ReportUpdated += value;
         remove => _poller.ReportUpdated -= value;
+    }
+
+    public bool IsRefreshing => _poller.IsRefreshing;
+
+    public event EventHandler<bool>? RefreshStateChanged
+    {
+        add => _poller.RefreshStateChanged += value;
+        remove => _poller.RefreshStateChanged -= value;
     }
 }
 
@@ -416,6 +429,13 @@ public sealed class TrayIconHost : IDisposable
             _view.MenuOpening += OnMenuOpening;
             _view.CommandInvoked += OnCommandInvoked;
             _reports.ReportUpdated += OnReportUpdated;
+            _reports.RefreshStateChanged += OnRefreshStateChanged;
+            _popup.RefreshRequested += OnWindowRefreshRequested;
+            _overlay.RefreshRequested += OnWindowRefreshRequested;
+            _popup.CloseRequested += OnPopupCloseRequested;
+            _overlay.CloseRequested += OnOverlayCloseRequested;
+            _popup.SetRefreshing(_reports.IsRefreshing);
+            _overlay.SetRefreshing(_reports.IsRefreshing);
             _view.Visible = true;
         }
         catch
@@ -453,7 +473,11 @@ public sealed class TrayIconHost : IDisposable
     public async Task ToggleOverlayAsync()
     {
         ThrowIfDisposed();
-        bool visible = !_overlay.IsVisible;
+        await SetOverlayVisibleAsync(!_overlay.IsVisible);
+    }
+
+    private async Task SetOverlayVisibleAsync(bool visible)
+    {
         if (visible)
         {
             _overlay.Show();
@@ -483,6 +507,7 @@ public sealed class TrayIconHost : IDisposable
         }
 
         _reports.ReportUpdated -= OnReportUpdated;
+        UnsubscribeWindowControls();
         _view.LeftClicked -= OnLeftClicked;
         _view.MenuOpening -= OnMenuOpening;
         _view.CommandInvoked -= OnCommandInvoked;
@@ -527,6 +552,67 @@ public sealed class TrayIconHost : IDisposable
 
     private void OnCommandInvoked(TrayCommand command) =>
         _ = ExecuteCommandSafelyAsync(command);
+
+    private void OnWindowRefreshRequested(object? sender, EventArgs args) =>
+        OnCommandInvoked(TrayCommand.Refresh);
+
+    private void OnPopupCloseRequested(object? sender, EventArgs args)
+    {
+        if (!IsDisposed())
+        {
+            _popup.Hide();
+        }
+    }
+
+    private async void OnOverlayCloseRequested(object? sender, EventArgs args)
+    {
+        if (IsDisposed())
+        {
+            return;
+        }
+
+        try
+        {
+            await SetOverlayVisibleAsync(false);
+        }
+        catch (Exception exception)
+        {
+            TryLogFailure(exception);
+        }
+    }
+
+    private void OnRefreshStateChanged(object? sender, bool refreshing)
+    {
+        if (IsDisposed())
+        {
+            return;
+        }
+
+        try
+        {
+            _dispatcher.Post(() =>
+            {
+                if (IsDisposed())
+                {
+                    return;
+                }
+
+                try
+                {
+                    _popup.SetRefreshing(refreshing);
+                    _overlay.SetRefreshing(refreshing);
+                }
+                catch (Exception exception)
+                {
+                    TryLogFailure(exception);
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            TryLogFailure(exception);
+        }
+    }
 
     private async Task ExecuteCommandSafelyAsync(TrayCommand command)
     {
@@ -624,6 +710,7 @@ public sealed class TrayIconHost : IDisposable
         try
         {
             _reports.ReportUpdated -= OnReportUpdated;
+            UnsubscribeWindowControls();
             _view.LeftClicked -= OnLeftClicked;
             _view.MenuOpening -= OnMenuOpening;
             _view.CommandInvoked -= OnCommandInvoked;
@@ -650,5 +737,14 @@ public sealed class TrayIconHost : IDisposable
         catch (Exception)
         {
         }
+    }
+
+    private void UnsubscribeWindowControls()
+    {
+        _reports.RefreshStateChanged -= OnRefreshStateChanged;
+        _popup.RefreshRequested -= OnWindowRefreshRequested;
+        _overlay.RefreshRequested -= OnWindowRefreshRequested;
+        _popup.CloseRequested -= OnPopupCloseRequested;
+        _overlay.CloseRequested -= OnOverlayCloseRequested;
     }
 }

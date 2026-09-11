@@ -5,22 +5,23 @@
 <h1 align="center">ReservePane</h1>
 
 ReservePane is a Windows tray application that shows Claude, Codex, Grok, OpenCode,
-OpenCode Go, and Ollama status at a glance. It displays current usage windows in a tray
+OpenCode Go, and Ollama Cloud status at a glance. It displays current usage windows in a tray
 popup, can keep an optional overlay above other windows, and raises
 notifications when usage crosses configured thresholds.
 
-<img src="docs/assets/overlay.png"
-     alt="ReservePane overlay showing mocked Claude, Codex, and Ollama status data"
-     width="400">
+<img src="docs/images/provider-controls.png"
+     alt="ReservePane popup and overlay with refresh and close controls and mocked provider data"
+     width="800">
 
-*Overlay shown with mocked provider data.*
+*Popup and overlay shown with mocked provider data.*
 
 ## Features
 
 - Claude, Codex, Grok, OpenCode Company Seat, and OpenCode Go usage windows
-- Local Ollama version and running-model status
+- Ollama Cloud usage through the existing Ollama CLI sign-in
 - Tray status based on the most urgent provider state
 - Optional movable, always-on-top overlay
+- Refresh and Close to tray controls in both status windows
 - Configurable warning and critical thresholds
 - Global `Ctrl+Alt+A` overlay shortcut
 - Optional start with Windows
@@ -30,13 +31,31 @@ notifications when usage crosses configured thresholds.
 - Windows 10 version 2004 or newer on x64
 - Claude Code, Codex CLI, Grok CLI, and/or OpenCode already authenticated for
   their respective cards
-- Ollama running locally for the Ollama card
+- Ollama CLI signed in with `ollama signin` for the Ollama Cloud card
 
 ReservePane reads only the required credential fields from files created by
-Claude Code, Codex CLI, Grok CLI, and OpenCode. It does not write those files,
+Claude Code, Codex CLI, Grok CLI, OpenCode, and Ollama CLI. It does not write those files,
 refresh tokens, or log credentials, account identifiers, or API response bodies.
 Providers are discovered from their local prerequisites. Providers that are not
 configured or installed remain hidden.
+
+Ollama Cloud uses the CLI's `%USERPROFILE%\.ollama\id_ed25519` identity to sign a
+bodyless request to the cloud usage endpoint. A separate API key and a running
+local model server are unnecessary. Run `ollama signin` again if the card asks
+you to sign in. Legacy session and weekly quotas display the percentages reported
+by Ollama. Monthly quota remains unavailable when the response does not establish
+its unit or total allowance. Reset times are shown only when established by the
+provider contract.
+
+Refreshing shows progress, retries eligible providers immediately, and preserves
+the last successful data with its age when a request fails. Provider-imposed
+retry delays remain in effect; the card shows the next permitted retry time.
+Close hides the window while ReservePane keeps running in the tray.
+
+Polling uses only allowlisted usage and account metadata endpoints. The HTTP
+transport rejects inference requests before sending them, so polling does not
+consume model tokens. Credential checks use `claude auth status` and read-only
+OpenCode database queries; ReservePane never starts a model prompt to test access.
 
 ## Installation
 

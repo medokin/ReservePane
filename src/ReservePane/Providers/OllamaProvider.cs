@@ -2,139 +2,179 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Security;
+using System.Security.Cryptography;
 using System.Text.Json;
+using Renci.SshNet.Common;
 using ReservePane.Model;
 
 namespace ReservePane.Providers;
 
-public sealed class OllamaProvider(HttpMessageHandler handler, TimeProvider? timeProvider = null)
-    : IStatusProvider, IProviderAvailability
+public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRetentionScopedStatusProvider
 {
-    private static readonly Uri VersionUri = new("http://localhost:11434/api/version");
-    private static readonly Uri ProcessUri = new("http://localhost:11434/api/ps");
-    private readonly HttpMessageHandler _handler = handler;
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly string _privateKeyPath;
+    private readonly HttpMessageHandler _handler;
+    private readonly Func<double?, Severity> _severityFromPercent;
+    private readonly TimeProvider _timeProvider;
+    private readonly object _scopeGate = new();
+    private ProviderRetentionScope _retentionScope = ProviderRetentionScope.Unknown;
+
+    public OllamaProvider(string privateKeyPath, HttpMessageHandler handler,
+        Func<double?, Severity> severityFromPercent, TimeProvider? timeProvider = null)
+    {
+        _privateKeyPath = privateKeyPath;
+        _handler = handler;
+        _severityFromPercent = severityFromPercent;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public string Id => "ollama";
+    public string Label => "Ollama Cloud";
 
-    public string Label => "Ollama";
+    public Task<bool> IsAvailableAsync(CancellationToken cancellationToken) =>
+        CredentialFilePrerequisite.IsPresentOrIndeterminateAsync(
+            _privateKeyPath, CredentialFilePrerequisite.Probe, cancellationToken);
 
-    public async Task<bool> IsAvailableAsync(CancellationToken cancellationToken)
+    ProviderRetentionScope IRetentionScopedStatusProvider.RetentionScope
     {
+        get { lock (_scopeGate) { return _retentionScope; } }
+    }
+
+    Task<ProviderRetentionScopeRefreshOutcome> IRetentionScopedStatusProvider.RefreshRetentionScopeAsync(
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            using var client = new HttpClient(_handler, disposeHandler: false);
-            using HttpResponseMessage response = await SendAsync(client, VersionUri, cancellationToken)
-                .ConfigureAwait(false);
-            return true;
+            using OllamaIdentity identity = ReadIdentity();
+            return Task.FromResult(ProviderRetentionScopeRefreshOutcome.Success);
         }
-        catch (HttpRequestException)
+        catch (Exception exception) when (IsMissingIdentity(exception))
         {
-            return false;
+            SetRetentionScope(ProviderRetentionScope.Known(null));
+            return Task.FromResult(ProviderRetentionScopeRefreshOutcome.Success);
+        }
+        catch (Exception exception) when (IsInvalidIdentity(exception))
+        {
+            return Task.FromResult(ProviderRetentionScopeRefreshOutcome.InvalidResponse);
         }
     }
 
     public async Task<ProviderFetchResult> FetchAsync(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         DateTimeOffset fetchedAt = _timeProvider.GetUtcNow();
-
+        OllamaIdentity identity;
         try
         {
-            using var client = new HttpClient(_handler, disposeHandler: false);
-            using HttpResponseMessage versionResponse = await SendAsync(client, VersionUri, cancellationToken)
-                .ConfigureAwait(false);
-            ProviderFetchResult? versionFailure = FailureFor(versionResponse, fetchedAt);
-            if (versionFailure is not null)
-            {
-                return versionFailure;
-            }
-
-            using JsonDocument version = await ProviderHttpSafety
-                .ReadJsonAsync(versionResponse, cancellationToken)
-                .ConfigureAwait(false);
-            if (version.RootElement.ValueKind != JsonValueKind.Object ||
-                !version.RootElement.TryGetProperty("version", out JsonElement versionValue) ||
-                versionValue.ValueKind != JsonValueKind.String ||
-                string.IsNullOrWhiteSpace(versionValue.GetString()))
-            {
-                return new ProviderFetchResult(
-                    ProviderFetchOutcome.InvalidResponse,
-                    statusCode: versionResponse.StatusCode);
-            }
-
-            using HttpResponseMessage processResponse = await SendAsync(client, ProcessUri, cancellationToken)
-                .ConfigureAwait(false);
-            ProviderFetchResult? processFailure = FailureFor(processResponse, fetchedAt);
-            if (processFailure is not null)
-            {
-                return processFailure;
-            }
-
-            using JsonDocument processes = await ProviderHttpSafety
-                .ReadJsonAsync(processResponse, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (processes.RootElement.ValueKind != JsonValueKind.Object ||
-                !processes.RootElement.TryGetProperty("models", out JsonElement models) ||
-                models.ValueKind != JsonValueKind.Array)
-            {
-                return new ProviderFetchResult(
-                    ProviderFetchOutcome.InvalidResponse,
-                    statusCode: processResponse.StatusCode);
-            }
-
-            return new ProviderFetchResult(
-                ProviderFetchOutcome.Success,
-                new ProviderSnapshot(
-                    Id,
-                    Label,
-                    HealthState.Ok,
-                    null,
-                    ImmutableArray<UsageWindow>.Empty,
-                    [
-                        new InfoLine("Version", versionValue.GetString()!),
-                        new InfoLine("Loaded models", models.GetArrayLength().ToString())
-                    ],
-                    null,
-                    fetchedAt,
-                    0));
+            identity = ReadIdentity();
         }
-        catch (HttpRequestException)
+        catch (Exception exception) when (IsMissingIdentity(exception))
         {
-            return new ProviderFetchResult(ProviderFetchOutcome.TransientFailure);
+            SetRetentionScope(ProviderRetentionScope.Known(null));
+            return new ProviderFetchResult(ProviderFetchOutcome.NotConfigured,
+                Snapshot(HealthState.Unreachable, [], "sign in: run ollama signin", fetchedAt));
         }
-        catch (InvalidDataException)
+        catch (Exception exception) when (IsInvalidIdentity(exception))
+        {
+            return AuthenticationRequired(fetchedAt);
+        }
+
+        using (identity)
+        {
+            try
+            {
+                using var client = new HttpClient(_handler, disposeHandler: false);
+                using HttpRequestMessage request = identity.CreateUsageRequest(fetchedAt);
+                using HttpResponseMessage response = await client.SendAsync(
+                    request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                {
+                    return AuthenticationRequired(fetchedAt, response.StatusCode);
+                }
+
+                TimeSpan? retryAfter = ProviderHttpSafety.GetRetryAfter(response, fetchedAt);
+                if (retryAfter is not null)
+                {
+                    return new ProviderFetchResult(ProviderFetchOutcome.RateLimited,
+                        statusCode: response.StatusCode, retryAfter: retryAfter);
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new ProviderFetchResult(ProviderFetchOutcome.TransientFailure, statusCode: response.StatusCode);
+                }
+
+                using JsonDocument document = await ProviderHttpSafety.ReadJsonAsync(response, cancellationToken)
+                    .ConfigureAwait(false);
+                return ParseUsage(document.RootElement, fetchedAt);
+            }
+            catch (HttpRequestException)
+            {
+                return new ProviderFetchResult(ProviderFetchOutcome.TransientFailure);
+            }
+            catch (InvalidDataException)
+            {
+                return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
+            }
+        }
+    }
+
+    private ProviderFetchResult ParseUsage(JsonElement root, DateTimeOffset fetchedAt)
+    {
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("limits", out JsonElement limits) || limits.ValueKind != JsonValueKind.Object)
         {
             return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
         }
-    }
 
-    private static ProviderFetchResult? FailureFor(HttpResponseMessage response, DateTimeOffset now)
-    {
-        TimeSpan? retryAfter = ProviderHttpSafety.GetRetryAfter(response, now);
-        if (retryAfter is not null)
+        var windows = ImmutableArray.CreateBuilder<UsageWindow>();
+        bool partial = false;
+        foreach ((string name, string label) in new[] { ("session", "Session"), ("weekly", "Weekly"), ("monthly", "Monthly") })
         {
-            return new ProviderFetchResult(
-                ProviderFetchOutcome.RateLimited,
-                statusCode: response.StatusCode,
-                retryAfter: retryAfter);
+            if (!limits.TryGetProperty(name, out JsonElement window)) continue;
+            if (window.ValueKind != JsonValueKind.Object ||
+                !window.TryGetProperty("usage", out JsonElement usage) || usage.ValueKind != JsonValueKind.Number ||
+                !usage.TryGetDouble(out double value) || !double.IsFinite(value) || value < 0 ||
+                (name != "monthly" && value > 1))
+            {
+                partial = true;
+                continue;
+            }
+
+            // The monthly payload has no unit or cap. Never infer a percentage from its magnitude.
+            double? percent = name == "monthly" ? null : value * 100;
+            partial |= percent is null;
+            windows.Add(new UsageWindow(label, percent, null, _severityFromPercent(percent)));
         }
 
-        return response.IsSuccessStatusCode
-            ? null
-            : new ProviderFetchResult(
-                ProviderFetchOutcome.TransientFailure,
-                statusCode: response.StatusCode);
+        if (windows.Count == 0) return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
+        return new ProviderFetchResult(partial ? ProviderFetchOutcome.PartialSuccess : ProviderFetchOutcome.Success,
+            Snapshot(partial ? HealthState.Degraded : HealthState.Ok, windows.ToImmutable(),
+                partial ? "Some usage limits are unavailable" : null, fetchedAt));
     }
 
-    private static async Task<HttpResponseMessage> SendAsync(
-        HttpClient client,
-        Uri uri,
-        CancellationToken cancellationToken)
+    private OllamaIdentity ReadIdentity()
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-        request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
-        return await client.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        SetRetentionScope(ProviderRetentionScope.Unknown);
+        OllamaIdentity identity = OllamaIdentity.Read(_privateKeyPath);
+        SetRetentionScope(ProviderRetentionScope.Known(identity.RetentionKey));
+        return identity;
     }
+
+    private void SetRetentionScope(ProviderRetentionScope scope)
+    {
+        lock (_scopeGate) { _retentionScope = scope; }
+    }
+
+    private ProviderFetchResult AuthenticationRequired(DateTimeOffset fetchedAt, HttpStatusCode? statusCode = null) =>
+        new(ProviderFetchOutcome.AuthenticationRequired,
+            Snapshot(HealthState.AuthExpired, [], "re-auth: run ollama signin", fetchedAt), statusCode);
+
+    private ProviderSnapshot Snapshot(HealthState health, ImmutableArray<UsageWindow> windows, string? error,
+        DateTimeOffset fetchedAt) => new(Id, Label, health, null, windows, [], error, fetchedAt, 0);
+
+    private static bool IsMissingIdentity(Exception exception) => exception is FileNotFoundException or DirectoryNotFoundException;
+    private static bool IsInvalidIdentity(Exception exception) => exception is IOException or InvalidDataException or UnauthorizedAccessException or
+        SecurityException or SshException or ArgumentException or FormatException or CryptographicException or NotSupportedException;
 }

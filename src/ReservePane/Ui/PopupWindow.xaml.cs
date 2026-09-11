@@ -33,6 +33,20 @@ public partial class PopupWindow : Window, IStatusWindow
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(60);
 
+    public event EventHandler? RefreshRequested
+    {
+        add => Header.RefreshRequested += value;
+        remove => Header.RefreshRequested -= value;
+    }
+
+    public event EventHandler? CloseRequested
+    {
+        add => Header.CloseRequested += value;
+        remove => Header.CloseRequested -= value;
+    }
+
+    public void SetRefreshing(bool refreshing) => Header.IsRefreshing = refreshing;
+
     public void SetProviders(IEnumerable<ProviderSnapshot> providers, TimeSpan activePollInterval)
     {
         ArgumentNullException.ThrowIfNull(providers);

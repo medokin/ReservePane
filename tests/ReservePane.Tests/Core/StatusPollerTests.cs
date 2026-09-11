@@ -12,6 +12,111 @@ public sealed class StatusPollerTests : IDisposable
 {
     private readonly List<TemporaryDirectory> _directories = [];
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PollOnceAsync_ReportsRefreshProgressAndClearsItAfterCompletion(bool cancel)
+    {
+        // Break caught: refresh feedback never appears or remains busy after completion/cancellation.
+        FakeStatusProvider provider = FakeStatusProvider.Blocking("codex");
+        StatusPoller poller = CreatePoller([provider]);
+        var states = new ConcurrentQueue<bool>();
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        poller.RefreshStateChanged += (_, refreshing) =>
+        {
+            states.Enqueue(refreshing);
+            if (!refreshing) finished.TrySetResult();
+        };
+        using var cancellation = new CancellationTokenSource();
+        Task<StatusReport> poll = poller.PollOnceAsync(cancellation.Token);
+        await provider.Started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        bool wasRefreshing = poller.IsRefreshing;
+        if (cancel)
+        {
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => poll);
+        }
+        else
+        {
+            provider.CompleteOk();
+            await poll;
+        }
+
+        Assert.True(wasRefreshing);
+        Assert.False(poller.IsRefreshing);
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal([true, false], states);
+    }
+
+    [Fact]
+    public async Task RefreshStateChanged_HandlerFailureDoesNotPreventRefreshOrLaterHandlers()
+    {
+        // Break caught: a UI feedback exception breaks polling or hides completion from other subscribers.
+        StatusPoller poller = CreatePoller([FakeStatusProvider.Returning("codex", FakeStatusProvider.Snapshot("codex"))]);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        poller.RefreshStateChanged += (_, _) => throw new InvalidOperationException("private diagnostic");
+        poller.RefreshStateChanged += (_, refreshing) => { if (!refreshing) finished.TrySetResult(); };
+
+        Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(poller.IsRefreshing);
+    }
+
+    [Theory]
+    [InlineData(ProviderFetchOutcome.TransientFailure, null, "Provider refresh failed. Refresh to retry.")]
+    [InlineData(ProviderFetchOutcome.TransientFailure, HttpStatusCode.BadGateway, "Provider request failed (HTTP 502). Refresh to retry.")]
+    [InlineData(ProviderFetchOutcome.InvalidResponse, HttpStatusCode.OK, "Provider returned an unexpected response.")]
+    public async Task PollOnceAsync_FailureExplainsWhyRefreshDidNotUpdateData(
+        ProviderFetchOutcome outcome, HttpStatusCode? status, string expected)
+    {
+        // Break caught: failed refreshes retain a generic or obsolete error instead of the actual failure category.
+        ProviderSnapshot good = FakeStatusProvider.Snapshot("codex", planLabel: "retained");
+        var provider = FakeStatusProvider.SequenceResults("codex",
+        [
+            _ => Task.FromResult(new ProviderFetchResult(ProviderFetchOutcome.Success, good)),
+            _ => Task.FromResult(new ProviderFetchResult(outcome, statusCode: status)),
+            _ => Task.FromResult(new ProviderFetchResult(ProviderFetchOutcome.Success, good)),
+        ]);
+        StatusPoller poller = CreatePoller([provider]);
+        await poller.PollOnceAsync(CancellationToken.None);
+
+        ProviderSnapshot failed = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        Assert.Equal(expected, failed.Error);
+        Assert.Equal("retained", failed.PlanLabel);
+        Assert.Equal(good.FetchedAt, failed.FetchedAt);
+        Assert.Null(Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers).Error);
+    }
+
+    [Fact]
+    public async Task PollOnceAsync_RateLimitShowsRetryTimeWhileManualRefreshIsDeferred()
+    {
+        // Break caught: a rate-limited refresh silently skips the provider without explaining the retry deadline.
+        var time = new RecordingTimeProvider();
+        var provider = FakeStatusProvider.ReturningResult("claude", new ProviderFetchResult(
+            ProviderFetchOutcome.RateLimited, statusCode: HttpStatusCode.TooManyRequests,
+            retryAfter: TimeSpan.FromMinutes(5)));
+        StatusPoller poller = CreatePoller([provider], timeProvider: time);
+        await poller.PollOnceAsync(CancellationToken.None);
+        ProviderSnapshot snapshot = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+
+        Assert.StartsWith("Rate limited. Retry after ", snapshot.Error);
+        Assert.Contains((time.GetUtcNow() + TimeSpan.FromMinutes(5)).ToLocalTime().ToString("HH:mm:ss"), snapshot.Error);
+        Assert.Equal(1, provider.InvocationCount);
+    }
+
+    [Theory]
+    [InlineData(false, "Provider refresh failed. Refresh to retry.")]
+    [InlineData(true, "Connection failed. Refresh to retry.")]
+    public async Task PollOnceAsync_LocalFailureDoesNotClaimAConnectionFailure(bool network, string expected)
+    {
+        // Break caught: local credential or CLI errors are incorrectly presented as network failures.
+        Exception exception = network ? new HttpRequestException("private detail") : new IOException("private detail");
+        var provider = new FakeStatusProvider("codex", (_, _) => Task.FromException<ProviderSnapshot>(exception));
+        StatusPoller poller = CreatePoller([provider]);
+
+        Assert.Equal(expected, Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers).Error);
+    }
+
     [Fact]
     public async Task PollOnceAsync_StartsProvidersBeforeEitherCompletes()
     {
@@ -140,6 +245,7 @@ public sealed class StatusPollerTests : IDisposable
 
         Assert.Equal(HealthState.Unreachable, snapshot.Health);
         Assert.Equal(1, snapshot.ConsecutiveFailures);
+        Assert.Equal("Provider request timed out. Refresh to retry.", snapshot.Error);
     }
 
     [Fact]

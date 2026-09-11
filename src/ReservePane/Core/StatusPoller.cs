@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
+using System.Net.Http;
 using System.Threading.Channels;
 using ReservePane.Model;
 using ReservePane.Providers;
@@ -18,7 +19,7 @@ public sealed class StatusPoller : IActivityCadencePoller
     private readonly SemaphoreSlim _pollGate = new(1, 1);
     private readonly object _cadenceGate = new();
     private readonly object _notificationGate = new();
-    private readonly Queue<StatusReport> _notificationQueue = new();
+    private readonly Queue<Action> _notificationQueue = new();
     private readonly ConcurrentDictionary<string, DateTimeOffset> _cooldowns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ProviderRetentionScope> _retentionScopes = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AvailabilityProbe> _availabilityProbes = new(StringComparer.Ordinal);
@@ -35,6 +36,7 @@ public sealed class StatusPoller : IActivityCadencePoller
     private bool _notificationPumpRunning;
     private int _reducedCadence;
     private int _runActive;
+    private int _refreshing;
 
     public StatusPoller(
         IReadOnlyList<IStatusProvider> providers,
@@ -58,6 +60,10 @@ public sealed class StatusPoller : IActivityCadencePoller
 
     public StatusReport Current => Volatile.Read(ref _current);
 
+    public bool IsRefreshing => Volatile.Read(ref _refreshing) != 0;
+
+    public event EventHandler<bool>? RefreshStateChanged;
+
     public event EventHandler<StatusReport>? ReportUpdated;
 
     public async Task<StatusReport> PollOnceAsync(CancellationToken cancellationToken)
@@ -67,6 +73,7 @@ public sealed class StatusPoller : IActivityCadencePoller
         await _pollGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            SetRefreshing(true);
             StatusReport previous = Current;
             Dictionary<string, ProviderSnapshot> previousById = previous.Providers
                 .GroupBy(snapshot => snapshot.Id, StringComparer.Ordinal)
@@ -97,6 +104,7 @@ public sealed class StatusPoller : IActivityCadencePoller
         }
         finally
         {
+            SetRefreshing(false);
             _pollGate.Release();
         }
 
@@ -586,7 +594,14 @@ public sealed class StatusPoller : IActivityCadencePoller
             ProviderSnapshot retained = RetainScopedFailure(
                 attempt.Provider,
                 attempt.Previous,
-                preserveLastGoodData: true);
+                preserveLastGoodData: true) with
+            {
+                Error = attempt.Kind == ProviderAttemptKind.TimedOut
+                    ? "Provider request timed out. Refresh to retry."
+                    : attempt.Exception is HttpRequestException
+                        ? "Connection failed. Refresh to retry."
+                        : "Provider refresh failed. Refresh to retry.",
+            };
             _log.Write(
                 LogArea.Provider,
                 attempt.Kind == ProviderAttemptKind.TimedOut ? LogOutcome.TimedOut : LogOutcome.Failed,
@@ -620,7 +635,7 @@ public sealed class StatusPoller : IActivityCadencePoller
             ProviderSnapshot retained = RetainScopedFailure(
                 provider,
                 previous,
-                preserveLastGoodData: true);
+                preserveLastGoodData: true) with { Error = "Provider returned an unexpected response." };
             LogProviderResult(
                 provider,
                 new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse, statusCode: result.StatusCode),
@@ -635,7 +650,10 @@ public sealed class StatusPoller : IActivityCadencePoller
             ProviderSnapshot retained = RetainScopedFailure(
                 provider,
                 previous,
-                result.PreserveLastGoodData);
+                result.PreserveLastGoodData) with
+            {
+                Error = FormattableString.Invariant($"Rate limited. Retry after {cooldownUntil.ToLocalTime():HH:mm:ss}."),
+            };
             LogProviderResult(provider, result, retained);
             return retained;
         }
@@ -658,14 +676,19 @@ public sealed class StatusPoller : IActivityCadencePoller
                 ProviderSnapshot transient = RetainScopedFailure(
                     provider,
                     previous,
-                    result.PreserveLastGoodData);
+                    result.PreserveLastGoodData) with
+                {
+                    Error = result.StatusCode is { } status
+                        ? FormattableString.Invariant($"Provider request failed (HTTP {(int)status}). Refresh to retry.")
+                        : "Provider refresh failed. Refresh to retry.",
+                };
                 LogProviderResult(provider, result, transient);
                 return transient;
             case ProviderFetchOutcome.InvalidResponse:
                 ProviderSnapshot invalid = RetainScopedFailure(
                     provider,
                     previous,
-                    result.PreserveLastGoodData);
+                    result.PreserveLastGoodData) with { Error = "Provider returned an unexpected response." };
                 LogProviderResult(provider, result, invalid);
                 return invalid;
             default:
@@ -803,11 +826,27 @@ public sealed class StatusPoller : IActivityCadencePoller
         }
     }
 
-    private TaskCompletionSource? EnqueueReportUpdated(StatusReport report)
+    private void SetRefreshing(bool refreshing)
+    {
+        Volatile.Write(ref _refreshing, refreshing ? 1 : 0);
+        if (RefreshStateChanged is null)
+        {
+            return;
+        }
+
+        TaskCompletionSource? pump = EnqueueNotification(() =>
+            InvokeHandlers(RefreshStateChanged, refreshing));
+        pump?.TrySetResult();
+    }
+
+    private TaskCompletionSource? EnqueueReportUpdated(StatusReport report) =>
+        EnqueueNotification(() => InvokeHandlers(ReportUpdated, report));
+
+    private TaskCompletionSource? EnqueueNotification(Action notification)
     {
         lock (_notificationGate)
         {
-            _notificationQueue.Enqueue(report);
+            _notificationQueue.Enqueue(notification);
             if (_notificationPumpRunning)
             {
                 return null;
@@ -834,15 +873,15 @@ public sealed class StatusPoller : IActivityCadencePoller
     {
         try
         {
-            while (TryDequeueNotification(out StatusReport report))
+            while (TryDequeueNotification(out Action notification))
             {
                 if (_synchronizationContext is null)
                 {
-                    InvokeReportUpdatedHandlers(report);
+                    notification();
                 }
                 else
                 {
-                    await InvokeReportUpdatedHandlersOnContextAsync(report).ConfigureAwait(false);
+                    await InvokeNotificationOnContextAsync(notification).ConfigureAwait(false);
                 }
             }
         }
@@ -852,23 +891,23 @@ public sealed class StatusPoller : IActivityCadencePoller
         }
     }
 
-    private bool TryDequeueNotification(out StatusReport report)
+    private bool TryDequeueNotification(out Action notification)
     {
         lock (_notificationGate)
         {
             if (_notificationQueue.Count > 0)
             {
-                report = _notificationQueue.Dequeue();
+                notification = _notificationQueue.Dequeue();
                 return true;
             }
 
             _notificationPumpRunning = false;
-            report = null!;
+            notification = null!;
             return false;
         }
     }
 
-    private Task InvokeReportUpdatedHandlersOnContextAsync(StatusReport report)
+    private Task InvokeNotificationOnContextAsync(Action notification)
     {
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -878,10 +917,10 @@ public sealed class StatusPoller : IActivityCadencePoller
             _synchronizationContext!.Post(
                 static state =>
                 {
-                    var dispatch = ((StatusPoller Poller, StatusReport Report, TaskCompletionSource Completion))state!;
+                    var dispatch = ((StatusPoller Poller, Action Notification, TaskCompletionSource Completion))state!;
                     try
                     {
-                        dispatch.Poller.InvokeReportUpdatedHandlers(dispatch.Report);
+                        dispatch.Notification();
                     }
                     catch (Exception exception)
                     {
@@ -892,7 +931,7 @@ public sealed class StatusPoller : IActivityCadencePoller
                         dispatch.Completion.TrySetResult();
                     }
                 },
-                (this, report, completion));
+                (this, notification, completion));
         }
         catch (Exception exception)
         {
@@ -903,19 +942,18 @@ public sealed class StatusPoller : IActivityCadencePoller
         return completion.Task;
     }
 
-    private void InvokeReportUpdatedHandlers(StatusReport report)
+    private void InvokeHandlers<T>(EventHandler<T>? handlers, T value)
     {
-        EventHandler<StatusReport>? handlers = ReportUpdated;
         if (handlers is null)
         {
             return;
         }
 
-        foreach (EventHandler<StatusReport> handler in handlers.GetInvocationList().Cast<EventHandler<StatusReport>>())
+        foreach (EventHandler<T> handler in handlers.GetInvocationList().Cast<EventHandler<T>>())
         {
             try
             {
-                handler(this, report);
+                handler(this, value);
             }
             catch (Exception exception)
             {

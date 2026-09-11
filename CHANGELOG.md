@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.0](https://github.com/medokin/ReservePane/compare/v0.3.0...v0.4.0) (2026-09-11)
+
+
+### Features
+
+* **app:** add ollama cloud status and refresh controls ([#46](https://github.com/medokin/ReservePane/issues/46)) ([f01e630](https://github.com/medokin/ReservePane/commit/f01e630e35d7fd5cbb0f4af1371f741d215e5af9))
+* **providers:** add grok quota monitoring ([#43](https://github.com/medokin/ReservePane/issues/43)) ([51e725c](https://github.com/medokin/ReservePane/commit/51e725c0de3692826ab9b0e03382bbf7f3463f59))
+
+
+### Bug Fixes
+
+* **providers:** retry opencode db reads when the database is busy ([#45](https://github.com/medokin/ReservePane/issues/45)) ([284251a](https://github.com/medokin/ReservePane/commit/284251a7a1bb2cac1ced1a85333ce4273565044d))
+
 ## [0.3.0](https://github.com/medokin/ReservePane/compare/v0.2.0...v0.3.0) (2026-08-28)
 
 

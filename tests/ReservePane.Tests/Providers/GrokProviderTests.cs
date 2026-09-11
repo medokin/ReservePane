@@ -114,6 +114,8 @@ public sealed class GrokProviderTests : IDisposable
         string[] acceptedMediaTypes = [];
         var handler = new StubHttpMessageHandler(request =>
         {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            Assert.Null(request.Content);
             authorization = request.Headers.Authorization;
             tokenAuth = request.Headers.GetValues("x-xai-token-auth").Single();
             requestUri = request.RequestUri;
@@ -129,6 +131,7 @@ public sealed class GrokProviderTests : IDisposable
         Assert.Equal("xai-grok-cli", tokenAuth);
         Assert.Contains("application/json", acceptedMediaTypes);
         Assert.Equal("https://cli-chat-proxy.grok.com/v1/billing?format=credits", requestUri?.ToString());
+        Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]

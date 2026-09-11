@@ -9,13 +9,13 @@ public sealed class ProviderRegistry : IDisposable
 {
     private static readonly TimeSpan ConnectionLifetime = TimeSpan.FromMinutes(15);
     private readonly Func<AppSettings> _settings;
-    private readonly SocketsHttpHandler[] _handlers;
+    private readonly UsageOnlyHttpHandler[] _handlers;
     private bool _disposed;
 
     private ProviderRegistry(
         Func<AppSettings> settings,
         AppPaths paths,
-        SocketsHttpHandler[] handlers)
+        UsageOnlyHttpHandler[] handlers)
     {
         _settings = settings;
         _handlers = handlers;
@@ -30,13 +30,13 @@ public sealed class ProviderRegistry : IDisposable
                 SeverityFromPercent,
                 () => GetOpenCodeConsoleWorkspaceSelector(_settings())),
             new OpenCodeCompanySeatProvider(handlers[4], SeverityFromPercent),
-            new OllamaProvider(handlers[5]),
+            new OllamaProvider(paths.OllamaPrivateKeyPath, handlers[5], SeverityFromPercent),
         ];
     }
 
     public IReadOnlyList<IStatusProvider> Providers { get; }
 
-    internal IReadOnlyList<SocketsHttpHandler> Handlers => _handlers;
+    internal IReadOnlyList<UsageOnlyHttpHandler> Handlers => _handlers;
 
     internal Severity SeverityFromPercent(double? percent)
     {
@@ -52,7 +52,7 @@ public sealed class ProviderRegistry : IDisposable
         ArgumentNullException.ThrowIfNull(settings);
         ArgumentNullException.ThrowIfNull(paths);
 
-        SocketsHttpHandler[] handlers = Enumerable.Range(0, 6)
+        UsageOnlyHttpHandler[] handlers = Enumerable.Range(0, 6)
             .Select(static _ => CreateHandler())
             .ToArray();
 
@@ -62,7 +62,7 @@ public sealed class ProviderRegistry : IDisposable
         }
         catch
         {
-            foreach (SocketsHttpHandler handler in handlers)
+            foreach (UsageOnlyHttpHandler handler in handlers)
             {
                 handler.Dispose();
             }
@@ -79,13 +79,13 @@ public sealed class ProviderRegistry : IDisposable
         }
 
         _disposed = true;
-        foreach (SocketsHttpHandler handler in _handlers)
+        foreach (UsageOnlyHttpHandler handler in _handlers)
         {
             handler.Dispose();
         }
     }
 
-    private static SocketsHttpHandler CreateHandler() => new()
+    private static UsageOnlyHttpHandler CreateHandler() => new(new SocketsHttpHandler
     {
         AutomaticDecompression =
             DecompressionMethods.GZip |
@@ -93,7 +93,7 @@ public sealed class ProviderRegistry : IDisposable
             DecompressionMethods.Brotli,
         AllowAutoRedirect = false,
         PooledConnectionLifetime = ConnectionLifetime,
-    };
+    });
 
     private static string? GetOpenCodeConsoleWorkspaceSelector(AppSettings settings) =>
         settings.Providers.TryGetValue("opencode-go", out ProviderSettings? provider)

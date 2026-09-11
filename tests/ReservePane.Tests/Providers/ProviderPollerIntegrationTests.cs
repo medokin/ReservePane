@@ -539,25 +539,41 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task OllamaConnectionFailureIncrementsFailuresAndRetainsInfo()
+    public async Task OllamaConnectionFailureIncrementsFailuresAndRetainsUsage()
     {
         // Break caught: Ollama connection refusal is published as a successful empty snapshot.
         int request = 0;
         var handler = new StubHttpMessageHandler(message => Interlocked.Increment(ref request) switch
         {
-            1 => JsonResponse(ReadFixture("ollama-version.json")),
-            2 => JsonResponse(ReadFixture("ollama-version.json")),
-            3 => JsonResponse(ReadFixture("ollama-ps.json")),
-            4 => JsonResponse(ReadFixture("ollama-version.json")),
-            5 => throw new HttpRequestException("refused"),
+            1 => JsonResponse("""{"limits":{"weekly":{"usage":0.25}}}"""),
+            2 => throw new HttpRequestException("refused"),
             _ => throw new InvalidOperationException($"Unexpected request: {message.RequestUri}"),
         });
-        StatusPoller poller = CreatePoller(new OllamaProvider(handler));
+        StatusPoller poller = CreatePoller(new OllamaProvider(OllamaTestIdentity.Write(_directory), handler, SeverityFromPercent));
 
         ProviderSnapshot good = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
         ProviderSnapshot retained = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
 
         AssertRetained(good, retained, HealthState.Ok, 1);
+    }
+
+    [Fact]
+    public async Task OllamaIdentityChangeDoesNotRetainPreviousUsageAfterFailure()
+    {
+        int request = 0;
+        var handler = new StubHttpMessageHandler(_ => ++request == 1
+            ? JsonResponse("""{"limits":{"weekly":{"usage":0.25}}}""")
+            : throw new HttpRequestException("refused"));
+        string keyPath = OllamaTestIdentity.Write(_directory);
+        StatusPoller poller = CreatePoller(new OllamaProvider(keyPath, handler, SeverityFromPercent));
+        ProviderSnapshot good = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        Assert.Single(good.Windows);
+
+        OllamaTestIdentity.Write(_directory);
+        ProviderSnapshot changed = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+
+        Assert.Empty(changed.Windows);
+        Assert.Equal(1, changed.ConsecutiveFailures);
     }
 
     [Fact]

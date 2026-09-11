@@ -50,8 +50,9 @@ public sealed class ProviderRegistryTests : IDisposable
 
         Assert.Equal(6, registry.Handlers.Count);
         Assert.Equal(6, registry.Handlers.Distinct().Count());
-        Assert.All(registry.Handlers, handler =>
+        Assert.All(registry.Handlers, guardedHandler =>
         {
+            SocketsHttpHandler handler = Assert.IsType<SocketsHttpHandler>(guardedHandler.InnerHandler);
             Assert.Equal(
                 DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli,
                 handler.AutomaticDecompression);
@@ -91,8 +92,28 @@ public sealed class ProviderRegistryTests : IDisposable
         foreach (HttpClient client in clients)
         {
             await Assert.ThrowsAsync<ObjectDisposedException>(
-                () => client.GetAsync("http://127.0.0.1:1", CancellationToken.None));
+                () => client.GetAsync("https://api.anthropic.com/api/oauth/usage", CancellationToken.None));
             client.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task Create_RejectsInferenceRequestsBeforeEveryProviderTransport()
+    {
+        // Break caught: a provider's registry transport is created without the usage-only boundary.
+        using ProviderRegistry registry = ProviderRegistry.Create(() => AppSettings.Default, CreatePaths());
+
+        foreach (UsageOnlyHttpHandler handler in registry.Handlers)
+        {
+            handler.InnerHandler!.Dispose();
+            var transport = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+            handler.InnerHandler = transport;
+            using var client = new HttpClient(handler, disposeHandler: false);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => client.GetAsync("https://ollama.com/api/generate", CancellationToken.None));
+
+            Assert.Equal(0, transport.RequestCount);
         }
     }
 

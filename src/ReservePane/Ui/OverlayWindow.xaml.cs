@@ -69,6 +69,20 @@ public partial class OverlayWindow : Window, IOverlayStatusWindow
 
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(60);
 
+    public event EventHandler? RefreshRequested
+    {
+        add => Header.RefreshRequested += value;
+        remove => Header.RefreshRequested -= value;
+    }
+
+    public event EventHandler? CloseRequested
+    {
+        add => Header.CloseRequested += value;
+        remove => Header.CloseRequested -= value;
+    }
+
+    public void SetRefreshing(bool refreshing) => Header.IsRefreshing = refreshing;
+
     internal bool IsDragging => _dragState.IsDragging;
 
     public Exception? LastPositionPersistenceFailure { get; private set; }

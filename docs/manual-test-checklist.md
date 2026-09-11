@@ -18,7 +18,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 |---|---|---|---|---|
 | LIVE-01 | Initial Claude card shows the live plan label and every returned usage window. |  |  |  |
 | LIVE-02 | Initial Codex card shows the live plan label and every returned usage window. |  |  |  |
-| LIVE-03 | Initial Ollama card shows the daemon version and loaded-model count. |  |  |  |
+| LIVE-03 | Ollama Cloud uses the existing CLI sign-in; supported session/weekly quotas appear and ambiguous monthly values remain explicitly unavailable. |  |  |  |
 | LIVE-04 | Initial Grok card shows the live plan label and every returned usage window. |  |  |  |
 | TRAY-01 | Tray is green when every reachable provider is below the warning threshold. |  |  |  |
 | TRAY-02 | Tray is amber at the warning threshold. |  |  |  |
@@ -32,6 +32,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | POPUP-02 | Popup remains fully visible beside a top-edge taskbar. |  |  |  |
 | POPUP-03 | Popup remains fully visible beside a left-edge taskbar. |  |  |  |
 | POPUP-04 | Popup remains fully visible beside a right-edge taskbar. |  |  |  |
+| POPUP-05 | Header displays the installed version; Refresh starts a poll and shows `Refreshing...` until it finishes; Close hides the popup and leaves the tray running. |  |  |  |
 | OVERLAY-01 | Overlay can be shown on each of two monitors with different DPI scaling. |  |  |  |
 | OVERLAY-02 | Top-left corner placement stays inside the selected monitor working area. |  |  |  |
 | OVERLAY-03 | Top-right corner placement stays inside the selected monitor working area. |  |  |  |
@@ -39,6 +40,9 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | OVERLAY-05 | Bottom-right corner placement stays inside the selected monitor working area. |  |  |  |
 | OVERLAY-06 | A custom dragged position is saved and restored after restart. |  |  |  |
 | OVERLAY-07 | While typing in another application, showing or updating the overlay does not move focus or interrupt input. |  |  |  |
+| OVERLAY-08 | Header Refresh polls without moving the overlay; both windows disable Refresh while busy and enable it afterward. |  |  |  |
+| OVERLAY-09 | Header Close hides the overlay, clears the tray menu check, and saves `OverlayVisible=false`; the overlay remains hidden after restart. |  |  |  |
+| OVERLAY-10 | Clicking either header button, including Refresh while disabled, never begins a drag. |  |  |  |
 | HOTKEY-01 | `Ctrl+Alt+A` toggles the overlay. |  |  |  |
 | HOTKEY-02 | If another process owns the hotkey, registration failure is graceful and the application remains usable. |  |  |  |
 | AUTOSTART-01 | Enabling Start with Windows adds only the `ReservePane` value with the quoted executable path. |  |  |  |
@@ -59,10 +63,10 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | POLL-06 | An RDP reconnect keeps the application responsive and polling. |  |  |  |
 | AUTH-01 | An expired Claude token shows `re-auth: run claude login`, raises one toast, then remains silent until state changes. |  |  |  |
 | AUTH-02 | An expired Codex token shows `re-auth: run codex login`, raises one toast, then remains silent until state changes. |  |  |  |
-| AUTH-03 | Claude, Codex, and Grok credential files have identical before-and-after SHA-256 digests. |  |  |  |
+| AUTH-03 | Claude, Codex, Grok, and Ollama CLI credential files have identical before-and-after SHA-256 digests. |  |  |  |
 | AUTH-04 | An expired Grok token shows `re-auth: run grok login`, raises one toast, then remains silent until state changes. |  |  |  |
-| OLLAMA-01 | A stopped Ollama daemon appears silently unreachable with no toast. |  |  |  |
-| OLLAMA-02 | Ollama recovers after its daemon starts. |  |  |  |
+| OLLAMA-01 | Ollama Cloud polling works without a local model server and sends only a signed, bodyless cloud usage request. |  |  |  |
+| OLLAMA-02 | A rejected Ollama CLI identity asks for `ollama signin`; refreshing after sign-in retries with the current identity. |  |  |  |
 | LOG-01 | `log.txt` rotates once at 1,048,576 bytes and both retained files stay within the cap. |  |  |  |
 | LOG-02 | Logs contain no request or response headers. |  |  |  |
 | LOG-03 | Logs contain no request or response bodies. |  |  |  |

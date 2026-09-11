@@ -56,6 +56,74 @@ public sealed class TrayIconHostTests : IDisposable
     }
 
     [Fact]
+    public void WindowRefreshRequests_RefreshWithoutClosingEitherWindow()
+    {
+        using var harness = new HostHarness(_directory.Path);
+        harness.Popup.Show();
+        harness.Overlay.Show();
+
+        harness.Popup.RaiseRefreshRequest();
+        harness.Overlay.RaiseRefreshRequest();
+
+        Assert.Equal(2, harness.RefreshRequests);
+        Assert.True(harness.Popup.IsVisible);
+        Assert.True(harness.Overlay.IsVisible);
+        Assert.Equal(0, harness.ShutdownRequests);
+    }
+
+    [Fact]
+    public async Task WindowCloseRequests_HideToTrayAndPersistOverlayVisibilityOnly()
+    {
+        using var harness = new HostHarness(_directory.Path);
+        await harness.Store.SaveAsync(AppSettings.Default with
+        {
+            OverlayVisible = true,
+            Hotkey = "Ctrl+Shift+Q",
+        }, CancellationToken.None);
+        harness.Popup.Show();
+        harness.Overlay.Show();
+
+        harness.Popup.RaiseCloseRequest();
+        Assert.False(harness.Popup.IsVisible);
+        Assert.True(harness.Overlay.IsVisible);
+
+        harness.Overlay.RaiseCloseRequest();
+        Assert.False(harness.Overlay.IsVisible);
+        await harness.Overlay.SettingsApplied.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        AppSettings saved = await harness.Store.LoadAsync(CancellationToken.None);
+
+        Assert.False(saved.OverlayVisible);
+        Assert.Equal("Ctrl+Shift+Q", saved.Hotkey);
+        Assert.False(harness.View.OverlayChecked);
+        Assert.Equal(0, harness.ShutdownRequests);
+        Assert.True(harness.View.Visible);
+    }
+
+    [Fact]
+    public void RefreshStateDelivery_UpdatesBothWindowsAndStopsAfterDisposal()
+    {
+        using var harness = new HostHarness(_directory.Path);
+
+        harness.Reports.RaiseRefreshState(true);
+        Assert.Equal(1, harness.Dispatcher.PendingCount);
+        harness.Dispatcher.RunNext();
+        Assert.True(harness.Popup.IsRefreshing);
+        Assert.True(harness.Overlay.IsRefreshing);
+
+        harness.Reports.RaiseRefreshState(false);
+        harness.Dispatcher.RunNext();
+        Assert.False(harness.Popup.IsRefreshing);
+        Assert.False(harness.Overlay.IsRefreshing);
+
+        harness.Host.Dispose();
+        harness.Popup.RaiseRefreshRequest();
+        harness.Overlay.RaiseRefreshRequest();
+        harness.Reports.RaiseRefreshState(true);
+        Assert.Equal(0, harness.RefreshRequests);
+        Assert.Equal(0, harness.Dispatcher.PendingCount);
+    }
+
+    [Fact]
     public async Task Commands_UseNarrowPersistenceAndRouteEveryAction()
     {
         using var harness = new HostHarness(_directory.Path);
@@ -333,11 +401,17 @@ public sealed class TrayIconHostTests : IDisposable
 
     private class FakeStatusWindow : IStatusWindow
     {
+        public event EventHandler? RefreshRequested;
+        public event EventHandler? CloseRequested;
         public bool IsVisible { get; private set; }
+        public bool IsRefreshing { get; private set; }
         public ImmutableArray<ProviderSnapshot> Providers { get; private set; } = [];
         public TimeSpan PollInterval { get; private set; }
         public void Show() => IsVisible = true;
         public void Hide() => IsVisible = false;
+        public void SetRefreshing(bool refreshing) => IsRefreshing = refreshing;
+        public void RaiseRefreshRequest() => RefreshRequested?.Invoke(this, EventArgs.Empty);
+        public void RaiseCloseRequest() => CloseRequested?.Invoke(this, EventArgs.Empty);
 
         public void SetProviders(IEnumerable<ProviderSnapshot> providers, TimeSpan activePollInterval)
         {
@@ -349,12 +423,19 @@ public sealed class TrayIconHostTests : IDisposable
     private sealed class FakeOverlayWindow : FakeStatusWindow, IOverlayStatusWindow
     {
         public AppSettings? AppliedSettings { get; private set; }
-        public void ApplySettings(AppSettings settings) => AppliedSettings = settings;
+        public TaskCompletionSource SettingsApplied { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void ApplySettings(AppSettings settings)
+        {
+            AppliedSettings = settings;
+            SettingsApplied.TrySetResult();
+        }
     }
 
     private sealed class FakeReportSource : IStatusReportSource
     {
         private EventHandler<StatusReport>? _reportUpdated;
+        public event EventHandler<bool>? RefreshStateChanged;
+        public bool IsRefreshing { get; private set; }
         public int SubscriberCount { get; private set; }
         public event EventHandler<StatusReport>? ReportUpdated
         {
@@ -370,6 +451,11 @@ public sealed class TrayIconHostTests : IDisposable
             }
         }
         public void Raise(StatusReport report) => _reportUpdated?.Invoke(this, report);
+        public void RaiseRefreshState(bool refreshing)
+        {
+            IsRefreshing = refreshing;
+            RefreshStateChanged?.Invoke(this, refreshing);
+        }
     }
 
     private sealed class FakeProcessLauncher : IProcessLauncher

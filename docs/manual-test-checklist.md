@@ -67,6 +67,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | AUTH-04 | An expired Grok token shows `re-auth: run grok login`, raises one toast, then remains silent until state changes. |  |  |  |
 | OLLAMA-01 | Ollama Cloud polling works without a local model server and sends only a signed, bodyless cloud usage request. |  |  |  |
 | OLLAMA-02 | A rejected Ollama CLI identity asks for `ollama signin`; refreshing after sign-in retries with the current identity. |  |  |  |
+| OLLAMA-03 | A monthly paid plan shows Estimated spend and Budget from its current published allowance; changing plans updates both rows and a failed plan lookup never combines fresh usage with an old budget. |  |  |  |
 | LOG-01 | `log.txt` rotates once at 1,048,576 bytes and both retained files stay within the cap. |  |  |  |
 | LOG-02 | Logs contain no request or response headers. |  |  |  |
 | LOG-03 | Logs contain no request or response bodies. |  |  |  |

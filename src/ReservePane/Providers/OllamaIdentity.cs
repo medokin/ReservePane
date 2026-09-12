@@ -53,12 +53,18 @@ internal sealed class OllamaIdentity : IDisposable
         }
     }
 
-    public HttpRequestMessage CreateUsageRequest(DateTimeOffset now)
+    public HttpRequestMessage CreateAccountRequest(DateTimeOffset now) =>
+        CreateRequest(HttpMethod.Post, "/api/me", now);
+
+    public HttpRequestMessage CreateUsageRequest(DateTimeOffset now) =>
+        CreateRequest(HttpMethod.Get, "/api/usage", now);
+
+    private HttpRequestMessage CreateRequest(HttpMethod method, string endpoint, DateTimeOffset now)
     {
-        string path = "/api/usage?ts=" + now.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
-        byte[] signature = _key.Key.Sign(Encoding.UTF8.GetBytes("GET," + path));
+        string path = endpoint + "?ts=" + now.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+        byte[] signature = _key.Key.Sign(Encoding.UTF8.GetBytes(method.Method + "," + path));
         string authorization = Convert.ToBase64String(_publicKey) + ":" + Convert.ToBase64String(signature);
-        var request = new HttpRequestMessage(HttpMethod.Get, new Uri("https://ollama.com" + path));
+        var request = new HttpRequestMessage(method, new Uri("https://ollama.com" + path));
         request.Headers.TryAddWithoutValidation("Authorization", authorization);
         request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

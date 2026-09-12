@@ -6,6 +6,72 @@ namespace ReservePane.Tests.Providers;
 
 public sealed class UsageOnlyHttpHandlerTests
 {
+    [Fact]
+    public async Task SendAsync_BodylessOllamaAccountMetadataReachesTransport()
+    {
+        var transport = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(new UsageOnlyHttpHandler(transport));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://ollama.com/api/me?ts=1789142400");
+
+        using HttpResponseMessage response = await client.SendAsync(request, CancellationToken.None);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, transport.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("GET", "https://ollama.com/api/me?ts=1789142400")]
+    [InlineData("PUT", "https://ollama.com/api/me?ts=1789142400")]
+    [InlineData("PATCH", "https://ollama.com/api/me?ts=1789142400")]
+    [InlineData("DELETE", "https://ollama.com/api/me?ts=1789142400")]
+    [InlineData("HEAD", "https://ollama.com/api/me?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com/api/usage?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com/api/chat?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com/api/generate?ts=1789142400")]
+    [InlineData("POST", "https://api.anthropic.com/api/oauth/usage")]
+    [InlineData("POST", "https://ollama.com/api/me")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=0")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=-1")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=abc")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=1789142400&ts=1789142401")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=1789142400&prompt=sentinel-secret")]
+    [InlineData("POST", "https://ollama.com/api/me/extra?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com.example.com/api/me?ts=1789142400")]
+    [InlineData("POST", "https://api.ollama.com/api/me?ts=1789142400")]
+    [InlineData("POST", "http://ollama.com/api/me?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com:444/api/me?ts=1789142400")]
+    [InlineData("POST", "https://sentinel-secret@ollama.com/api/me?ts=1789142400")]
+    [InlineData("POST", "https://ollama.com/api/me?ts=1789142400#sentinel-secret")]
+    public async Task SendAsync_OllamaAccountExceptionDoesNotBroadenOtherRequests(string method, string url)
+    {
+        var transport = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(new UsageOnlyHttpHandler(transport));
+        using var request = new HttpRequestMessage(new HttpMethod(method), url);
+
+        InvalidOperationException exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.SendAsync(request, CancellationToken.None));
+
+        Assert.Equal(0, transport.RequestCount);
+        Assert.DoesNotContain("sentinel-secret", exception.Message);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("sentinel-secret")]
+    public async Task SendAsync_OllamaAccountWithAnyContentNeverReachesTransport(string body)
+    {
+        var transport = new StubHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        using var client = new HttpClient(new UsageOnlyHttpHandler(transport));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "https://ollama.com/api/me?ts=1789142400")
+        {
+            Content = new StringContent(body),
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync(request, CancellationToken.None));
+
+        Assert.Equal(0, transport.RequestCount);
+    }
+
     [Theory]
     [InlineData("https://api.anthropic.com/api/oauth/usage")]
     [InlineData("https://api.anthropic.com/api/oauth/profile")]

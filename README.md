@@ -39,13 +39,23 @@ refresh tokens, or log credentials, account identifiers, or API response bodies.
 Providers are discovered from their local prerequisites. Providers that are not
 configured or installed remain hidden.
 
-Ollama Cloud uses the CLI's `%USERPROFILE%\.ollama\id_ed25519` identity to sign a
-bodyless request to the cloud usage endpoint. A separate API key and a running
+Ollama Cloud uses the CLI's `%USERPROFILE%\.ollama\id_ed25519` identity to sign
+bodyless usage and account metadata requests. A separate API key and a running
 local model server are unnecessary. Run `ollama signin` again if the card asks
 you to sign in. Monthly usage and legacy session/weekly quotas display the used
-percentage reported by Ollama. The monthly fraction is rounded by the provider,
-so the card shows a percentage instead of estimating an exact dollar amount.
-Reset times are shown only when established by the provider contract.
+percentage reported by Ollama.
+
+Monthly paid plans also show **Estimated spend** and **Budget**. ReservePane
+refreshes the current plan with usage and uses Ollama's [published included
+monthly allowances](https://ollama.com/blog/transparent-pricing): Pro USD 60,
+Max USD 300, and Team USD 1000. These are usage
+allowances, not subscription prices. The spend estimate multiplies that
+allowance by Ollama's rounded usage fraction and may differ slightly from the
+dashboard's exact dollar amount. Free and unrecognized plans retain the
+percentage without dollar estimates. Plan lookup failures clear dollar estimates
+whenever fresh usage is displayed. Polls that time out or are rate limited retain
+the last successful snapshot. Reset times are shown only when established by
+the provider contract.
 
 Refreshing shows progress, retries eligible providers immediately, and preserves
 the last successful data with its age when a request fails. Provider-imposed

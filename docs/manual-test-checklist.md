@@ -18,7 +18,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 |---|---|---|---|---|
 | LIVE-01 | Initial Claude card shows the live plan label and every returned usage window. |  |  |  |
 | LIVE-02 | Initial Codex card shows the live plan label and every returned usage window. |  |  |  |
-| LIVE-03 | Ollama Cloud uses the existing CLI sign-in; supported session/weekly quotas appear and ambiguous monthly values remain explicitly unavailable. |  |  |  |
+| LIVE-03 | Ollama Cloud uses the existing CLI sign-in; monthly usage matches the dashboard percentage to the provider's precision, and legacy session/weekly quotas still appear when returned. |  |  |  |
 | LIVE-04 | Initial Grok card shows the live plan label and every returned usage window. |  |  |  |
 | TRAY-01 | Tray is green when every reachable provider is below the warning threshold. |  |  |  |
 | TRAY-02 | Tray is amber at the warning threshold. |  |  |  |

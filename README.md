@@ -42,10 +42,10 @@ configured or installed remain hidden.
 Ollama Cloud uses the CLI's `%USERPROFILE%\.ollama\id_ed25519` identity to sign a
 bodyless request to the cloud usage endpoint. A separate API key and a running
 local model server are unnecessary. Run `ollama signin` again if the card asks
-you to sign in. Legacy session and weekly quotas display the percentages reported
-by Ollama. Monthly quota remains unavailable when the response does not establish
-its unit or total allowance. Reset times are shown only when established by the
-provider contract.
+you to sign in. Monthly usage and legacy session/weekly quotas display the used
+percentage reported by Ollama. The monthly fraction is rounded by the provider,
+so the card shows a percentage instead of estimating an exact dollar amount.
+Reset times are shown only when established by the provider contract.
 
 Refreshing shows progress, retries eligible providers immediately, and preserves
 the last successful data with its age when a request fails. Provider-imposed

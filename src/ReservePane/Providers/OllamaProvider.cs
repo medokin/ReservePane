@@ -135,16 +135,15 @@ public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRe
             if (!limits.TryGetProperty(name, out JsonElement window)) continue;
             if (window.ValueKind != JsonValueKind.Object ||
                 !window.TryGetProperty("usage", out JsonElement usage) || usage.ValueKind != JsonValueKind.Number ||
-                !usage.TryGetDouble(out double value) || !double.IsFinite(value) || value < 0 ||
+                !usage.TryGetDouble(out double value) || !double.IsFinite(value * 100) || value < 0 ||
                 (name != "monthly" && value > 1))
             {
                 unavailableReason = "Some usage limits are unavailable";
                 continue;
             }
 
-            // The monthly payload has no unit or cap. Never infer a percentage from its magnitude.
-            double? percent = name == "monthly" ? null : value * 100;
-            if (percent is null) unavailableReason ??= "Monthly usage format is not supported yet";
+            // Limit usage is a consumed fraction; activity costs cover a separate reporting period.
+            double percent = value * 100;
             windows.Add(new UsageWindow(label, percent, null, _severityFromPercent(percent)));
         }
 

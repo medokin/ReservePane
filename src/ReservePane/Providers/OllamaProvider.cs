@@ -129,7 +129,7 @@ public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRe
         }
 
         var windows = ImmutableArray.CreateBuilder<UsageWindow>();
-        bool partial = false;
+        string? unavailableReason = null;
         foreach ((string name, string label) in new[] { ("session", "Session"), ("weekly", "Weekly"), ("monthly", "Monthly") })
         {
             if (!limits.TryGetProperty(name, out JsonElement window)) continue;
@@ -138,20 +138,21 @@ public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRe
                 !usage.TryGetDouble(out double value) || !double.IsFinite(value) || value < 0 ||
                 (name != "monthly" && value > 1))
             {
-                partial = true;
+                unavailableReason = "Some usage limits are unavailable";
                 continue;
             }
 
             // The monthly payload has no unit or cap. Never infer a percentage from its magnitude.
             double? percent = name == "monthly" ? null : value * 100;
-            partial |= percent is null;
+            if (percent is null) unavailableReason ??= "Monthly usage format is not supported yet";
             windows.Add(new UsageWindow(label, percent, null, _severityFromPercent(percent)));
         }
 
         if (windows.Count == 0) return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
+        bool partial = unavailableReason is not null;
         return new ProviderFetchResult(partial ? ProviderFetchOutcome.PartialSuccess : ProviderFetchOutcome.Success,
             Snapshot(partial ? HealthState.Degraded : HealthState.Ok, windows.ToImmutable(),
-                partial ? "Some usage limits are unavailable" : null, fetchedAt));
+                unavailableReason, fetchedAt));
     }
 
     private OllamaIdentity ReadIdentity()

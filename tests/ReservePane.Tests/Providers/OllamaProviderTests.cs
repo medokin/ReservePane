@@ -135,6 +135,7 @@ public sealed class OllamaProviderTests : IDisposable
         Assert.Equal("Monthly", monthly.Label);
         Assert.Null(monthly.Percent);
         Assert.Null(monthly.ResetsAt);
+        Assert.Equal("Monthly usage format is not supported yet", result.Snapshot.Error);
     }
 
     [Theory]

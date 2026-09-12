@@ -62,6 +62,12 @@ the last successful data with its age when a request fails. Provider-imposed
 retry delays remain in effect; the card shows the next permitted retry time.
 Close hides the window while ReservePane keeps running in the tray.
 
+Claude usage checks are spaced at least five minutes apart, including manual
+refreshes, to reduce rate limiting of its usage endpoint. Between checks, the
+card keeps the last result and its original update time. Longer retry delays
+still apply. Other providers keep the configured polling cadence, which defaults
+to 60 seconds.
+
 Polling uses only allowlisted usage and account metadata endpoints. The HTTP
 transport rejects inference requests before sending them, so polling does not
 consume model tokens. Credential checks use `claude auth status` and read-only

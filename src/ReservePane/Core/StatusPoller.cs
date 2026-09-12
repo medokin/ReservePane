@@ -585,12 +585,20 @@ public sealed class StatusPoller : IActivityCadencePoller
             return RetainCooldown(attempt.Provider, attempt.Previous);
         }
 
-        if (attempt.Kind is ProviderAttemptKind.TimedOut or ProviderAttemptKind.Failed)
+        if (!attempt.PreserveCooldown)
         {
-            if (!attempt.PreserveCooldown)
+            if (attempt.Provider.MinimumRefreshInterval > TimeSpan.Zero)
+            {
+                _cooldowns[attempt.Provider.Id] = _timeProvider.GetUtcNow() + attempt.Provider.MinimumRefreshInterval;
+            }
+            else
             {
                 _cooldowns.TryRemove(attempt.Provider.Id, out _);
             }
+        }
+
+        if (attempt.Kind is ProviderAttemptKind.TimedOut or ProviderAttemptKind.Failed)
+        {
             ProviderSnapshot retained = RetainScopedFailure(
                 attempt.Provider,
                 attempt.Previous,
@@ -615,23 +623,17 @@ public sealed class StatusPoller : IActivityCadencePoller
         return ApplyResult(
             attempt.Provider,
             attempt.Previous,
-            attempt.Result!,
-            attempt.PreserveCooldown);
+            attempt.Result!);
     }
 
     private ProviderSnapshot ApplyResult(
         IStatusProvider provider,
         ProviderSnapshot? previous,
-        ProviderFetchResult result,
-        bool preserveCooldown)
+        ProviderFetchResult result)
     {
         ProviderSnapshot? snapshot = result.Snapshot;
         if (snapshot is not null && !string.Equals(snapshot.Id, provider.Id, StringComparison.Ordinal))
         {
-            if (!preserveCooldown)
-            {
-                _cooldowns.TryRemove(provider.Id, out _);
-            }
             ProviderSnapshot retained = RetainScopedFailure(
                 provider,
                 previous,
@@ -645,7 +647,12 @@ public sealed class StatusPoller : IActivityCadencePoller
 
         if (result.Outcome == ProviderFetchOutcome.RateLimited)
         {
-            DateTimeOffset cooldownUntil = _timeProvider.GetUtcNow() + result.RetryAfter!.Value;
+            TimeSpan retryAfter = result.RetryAfter!.Value;
+            if (retryAfter < provider.MinimumRefreshInterval)
+            {
+                retryAfter = provider.MinimumRefreshInterval;
+            }
+            DateTimeOffset cooldownUntil = _timeProvider.GetUtcNow() + retryAfter;
             _cooldowns[provider.Id] = cooldownUntil;
             ProviderSnapshot retained = RetainScopedFailure(
                 provider,
@@ -654,14 +661,10 @@ public sealed class StatusPoller : IActivityCadencePoller
             {
                 Error = FormattableString.Invariant($"Rate limited. Retry after {cooldownUntil.ToLocalTime():HH:mm:ss}."),
             };
-            LogProviderResult(provider, result, retained);
+            LogProviderResult(provider, result, retained, retryAfter);
             return retained;
         }
 
-        if (!preserveCooldown)
-        {
-            _cooldowns.TryRemove(provider.Id, out _);
-        }
         switch (result.Outcome)
         {
             case ProviderFetchOutcome.Success:
@@ -699,7 +702,8 @@ public sealed class StatusPoller : IActivityCadencePoller
     private void LogProviderResult(
         IStatusProvider provider,
         ProviderFetchResult result,
-        ProviderSnapshot snapshot)
+        ProviderSnapshot snapshot,
+        TimeSpan? effectiveRetryAfter = null)
     {
         LogOutcome logOutcome = result.Outcome switch
         {
@@ -712,7 +716,7 @@ public sealed class StatusPoller : IActivityCadencePoller
             ProviderFetchOutcome.InvalidResponse => LogOutcome.Invalid,
             _ => throw new InvalidOperationException("Validated provider outcome was not mapped."),
         };
-        int? cooldownSeconds = result.RetryAfter is TimeSpan retryAfter
+        int? cooldownSeconds = (effectiveRetryAfter ?? result.RetryAfter) is TimeSpan retryAfter
             ? checked((int)Math.Ceiling(retryAfter.TotalSeconds))
             : null;
         _log.Write(

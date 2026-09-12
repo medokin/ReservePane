@@ -93,7 +93,7 @@ public sealed class SettingsStore : IDisposable
     public async Task SaveAsync(AppSettings settings, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        if (!TryNormalize(settings, out AppSettings normalized))
+        if (!IsValid(settings))
         {
             throw new ArgumentException("Settings must be complete and valid.", nameof(settings));
         }
@@ -102,7 +102,7 @@ public sealed class SettingsStore : IDisposable
         try
         {
             ThrowIfDisposedLocked();
-            await WriteAsync(normalized, cancellationToken).ConfigureAwait(false);
+            await WriteAsync(settings, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -130,13 +130,13 @@ public sealed class SettingsStore : IDisposable
 
             AppSettings candidate = update(current)
                 ?? throw new ArgumentException("The settings updater returned null.", nameof(update));
-            if (!TryNormalize(candidate, out AppSettings updated))
+            if (!IsValid(candidate))
             {
                 throw new ArgumentException("The settings updater produced invalid settings.", nameof(update));
             }
 
-            await WriteAsync(updated, cancellationToken).ConfigureAwait(false);
-            return updated;
+            await WriteAsync(candidate, cancellationToken).ConfigureAwait(false);
+            return candidate;
         }
         finally
         {
@@ -298,8 +298,8 @@ public sealed class SettingsStore : IDisposable
         {
             await using FileStream stream = new(_path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 4096, useAsync: true);
             AppSettings? settings = await JsonSerializer.DeserializeAsync<AppSettings>(stream, JsonOptions, cancellationToken).ConfigureAwait(false);
-            return settings is not null && TryNormalize(settings, out AppSettings normalized)
-                ? (true, normalized)
+            return settings is not null && IsValid(settings)
+                ? (true, settings)
                 : (false, AppSettings.Default);
         }
         catch (JsonException)
@@ -316,13 +316,12 @@ public sealed class SettingsStore : IDisposable
         }
     }
 
-    private static bool TryNormalize(AppSettings settings, out AppSettings normalized)
+    private static bool IsValid(AppSettings settings)
     {
-        normalized = AppSettings.Default;
         if (settings.PollInterval <= TimeSpan.Zero || settings.IdleInterval <= TimeSpan.Zero ||
             !double.IsFinite(settings.WarningPercent) || !double.IsFinite(settings.CriticalPercent) ||
             settings.WarningPercent < 0 || settings.WarningPercent >= settings.CriticalPercent || settings.CriticalPercent > 100 ||
-            settings.Providers is null || string.IsNullOrWhiteSpace(settings.Hotkey) ||
+            string.IsNullOrWhiteSpace(settings.Hotkey) ||
             !Enum.IsDefined(settings.OverlayCorner))
         {
             return false;
@@ -331,64 +330,6 @@ public sealed class SettingsStore : IDisposable
         if (settings.OverlayPosition is { X: var x, Y: var y } && (!double.IsFinite(x) || !double.IsFinite(y)))
         {
             return false;
-        }
-
-        if (settings.Providers.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null))
-        {
-            return false;
-        }
-
-        var providers = settings.Providers.ToBuilder();
-        foreach ((string providerId, ProviderSettings provider) in settings.Providers)
-        {
-            OpenCodeConsoleSettings? console = provider.OpenCodeConsole;
-            if (console is not null &&
-                !string.Equals(providerId, "opencode-go", StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            if (console?.WorkspaceSelector is not string selector)
-            {
-                continue;
-            }
-
-            if (!IsWorkspaceSelector(selector))
-            {
-                return false;
-            }
-
-            providers[providerId] = provider with
-            {
-                OpenCodeConsole = console with
-                {
-                    WorkspaceSelector = selector.ToLowerInvariant(),
-                },
-            };
-        }
-
-        foreach ((string providerId, ProviderSettings provider) in AppSettings.Default.Providers)
-        {
-            providers.TryAdd(providerId, provider);
-        }
-
-        normalized = settings with { Providers = providers.ToImmutable() };
-        return true;
-    }
-
-    private static bool IsWorkspaceSelector(string selector)
-    {
-        if (selector.Length != 64)
-        {
-            return false;
-        }
-
-        foreach (char character in selector)
-        {
-            if (character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f') and not (>= 'A' and <= 'F'))
-            {
-                return false;
-            }
         }
 
         return true;

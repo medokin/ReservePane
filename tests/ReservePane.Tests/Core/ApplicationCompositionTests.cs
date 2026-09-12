@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using ReservePane.Core;
 using ReservePane.Model;
 using ReservePane.Tests.Support;
@@ -54,7 +53,6 @@ public sealed class ApplicationCompositionTests : IDisposable
             WarningPercent = 70,
             CriticalPercent = 90,
             PollInterval = TimeSpan.FromSeconds(45),
-            Providers = rejected.Providers.SetItem("ollama", new ProviderSettings()),
             OverlayVisible = true,
             OverlayCorner = OverlayCorner.TopLeft,
         };
@@ -94,10 +92,7 @@ public sealed class ApplicationCompositionTests : IDisposable
             () => refreshes++,
             () => Task.CompletedTask,
             CreateLog());
-        AppSettings equivalentReload = initial with
-        {
-            Providers = initial.Providers.ToImmutableDictionary(),
-        };
+        AppSettings equivalentReload = initial with { };
 
         coordinator.Apply(equivalentReload);
 

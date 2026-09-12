@@ -20,6 +20,9 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | LIVE-02 | Initial Codex card shows the live plan label and every returned usage window. |  |  |  |
 | LIVE-03 | Ollama Cloud uses the existing CLI sign-in; monthly usage matches the dashboard percentage to the provider's precision, and legacy session/weekly quotas still appear when returned. |  |  |  |
 | LIVE-04 | Initial Grok card shows the live plan label and every returned usage window. |  |  |  |
+| LIVE-05 | Without an `opencode-go` API key, OpenCode Go follows the active Console account and workspace; switching either takes effect on the next poll. |  |  |  |
+| LIVE-06 | OpenCode Company Seat follows the active Console account and workspace and displays the member's budget. |  |  |  |
+| LIVE-07 | A configured `opencode-go` API key takes precedence over Console discovery for Go. |  |  |  |
 | TRAY-01 | Tray is green when every reachable provider is below the warning threshold. |  |  |  |
 | TRAY-02 | Tray is amber at the warning threshold. |  |  |  |
 | TRAY-03 | Tray is red at the critical threshold. |  |  |  |
@@ -75,6 +78,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | LOG-05 | Logs contain no account or user identifiers. |  |  |  |
 | LOG-06 | Logs contain no email addresses. |  |  |  |
 | SETTINGS-01 | `%APPDATA%\ReservePane\settings.json` contains no access token, refresh token, account identifier, email address, or response body. |  |  |  |
+| SETTINGS-02 | Loading legacy `Providers` settings preserves other preferences, including with an invalid `WorkspaceSelector`; the next save removes the obsolete provider configuration. |  |  |  |
 
 ## Release verification
 

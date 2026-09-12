@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-
 namespace ReservePane.Core;
 
 internal interface IUiDispatcher
@@ -237,7 +235,7 @@ internal sealed class ApplicationSettingsCoordinator : IDisposable
             }
         }
 
-        if (thresholdsChanged || CadenceOrProvidersChanged(previous, next))
+        if (thresholdsChanged || CadenceChanged(previous, next))
         {
             _requestRefresh();
         }
@@ -314,18 +312,9 @@ internal sealed class ApplicationSettingsCoordinator : IDisposable
         !string.Equals(previous.OverlayMonitorId, next.OverlayMonitorId, StringComparison.Ordinal) ||
         previous.OverlayPosition != next.OverlayPosition;
 
-    private static bool CadenceOrProvidersChanged(AppSettings previous, AppSettings next) =>
+    private static bool CadenceChanged(AppSettings previous, AppSettings next) =>
         previous.PollInterval != next.PollInterval ||
-        previous.IdleInterval != next.IdleInterval ||
-        !ProvidersEqual(previous.Providers, next.Providers);
-
-    private static bool ProvidersEqual(
-        ImmutableDictionary<string, ProviderSettings> first,
-        ImmutableDictionary<string, ProviderSettings> second) =>
-        first.Count == second.Count &&
-        first.All(pair =>
-            second.TryGetValue(pair.Key, out ProviderSettings? settings) &&
-            pair.Value == settings);
+        previous.IdleInterval != next.IdleInterval;
 }
 
 internal sealed class ApplicationShutdownCoordinator

@@ -1,144 +1,11 @@
-using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
 using System.IO;
-using System.Text.Json;
 
 namespace ReservePane.Providers;
 
-internal sealed record OpenCodeConsoleAccount(
-    string AccountId,
-    string AccessToken,
-    DateTimeOffset? ExpiresAt);
-
-internal interface IOpenCodeConsoleAccountReader
+internal static class OpenCodeConsoleQueryRunner
 {
-    Task<ImmutableArray<OpenCodeConsoleAccount>> ReadAsync(CancellationToken cancellationToken);
-}
-
-internal sealed class OpenCodeConsoleAccountReader : IOpenCodeConsoleAccountReader
-{
-    private const int MaximumAccounts = 32;
     private const int MaximumDatabaseBusyAttempts = 3;
-    private const string ConsoleUrl = "https://opencode.ai/console";
-    private const string AccountQuery =
-        "select a.id, a.url, a.access_token, a.token_expiry " +
-        "from account a where a.url = 'https://opencode.ai/console' " +
-        "order by a.id limit 33;";
-
-    private readonly Func<string, CancellationToken, Task<byte[]?>> _runQuery;
-
-    public OpenCodeConsoleAccountReader()
-        : this(RunQueryAsync)
-    {
-    }
-
-    internal OpenCodeConsoleAccountReader(
-        Func<string, CancellationToken, Task<byte[]?>> runQuery)
-    {
-        _runQuery = runQuery;
-    }
-
-    public async Task<ImmutableArray<OpenCodeConsoleAccount>> ReadAsync(
-        CancellationToken cancellationToken)
-    {
-        byte[]? output = await _runQuery(AccountQuery, cancellationToken).ConfigureAwait(false);
-        if (output is null)
-        {
-            return [];
-        }
-
-        if (output.Length > ProviderHttpSafety.MaximumJsonBytes)
-        {
-            throw InvalidOutput();
-        }
-
-        JsonDocument document;
-        try
-        {
-            document = JsonDocument.Parse(output);
-        }
-        catch (JsonException)
-        {
-            throw InvalidOutput();
-        }
-
-        using (document)
-        {
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                throw InvalidOutput();
-            }
-
-            int rowCount = document.RootElement.GetArrayLength();
-            if (rowCount > MaximumAccounts)
-            {
-                throw InvalidOutput();
-            }
-
-            var accounts = ImmutableArray.CreateBuilder<OpenCodeConsoleAccount>(rowCount);
-            foreach (JsonElement row in document.RootElement.EnumerateArray())
-            {
-                if (!TryReadAccount(row, out OpenCodeConsoleAccount? account))
-                {
-                    continue;
-                }
-
-                accounts.Add(account);
-            }
-
-            return accounts.ToImmutable();
-        }
-    }
-
-    private static bool TryReadAccount(
-        JsonElement row,
-        [NotNullWhen(true)] out OpenCodeConsoleAccount? account)
-    {
-        account = null;
-        if (row.ValueKind != JsonValueKind.Object ||
-            !TryReadString(row, "id", out string? accountId) ||
-            !TryReadString(row, "url", out string? url) ||
-            !TryReadString(row, "access_token", out string? accessToken) ||
-            !string.Equals(url, ConsoleUrl, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        DateTimeOffset? expiresAt = null;
-        if (row.TryGetProperty("token_expiry", out JsonElement expiry) &&
-            expiry.ValueKind != JsonValueKind.Null)
-        {
-            if (expiry.ValueKind != JsonValueKind.Number ||
-                !expiry.TryGetInt64(out long milliseconds))
-            {
-                return false;
-            }
-
-            try
-            {
-                expiresAt = DateTimeOffset.FromUnixTimeMilliseconds(milliseconds);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return false;
-            }
-        }
-
-        account = new OpenCodeConsoleAccount(accountId, accessToken, expiresAt);
-        return true;
-    }
-
-    private static bool TryReadString(
-        JsonElement row,
-        string propertyName,
-        [NotNullWhen(true)] out string? value)
-    {
-        value = null;
-        return row.TryGetProperty(propertyName, out JsonElement element) &&
-            element.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(value = element.GetString());
-    }
 
     internal static async Task<byte[]?> RunQueryAsync(
         string query,
@@ -335,5 +202,5 @@ internal sealed class OpenCodeConsoleAccountReader : IOpenCodeConsoleAccountRead
     }
 
     private static InvalidDataException InvalidOutput() =>
-        new("OpenCode account discovery returned invalid data.");
+        new("OpenCode Console query returned invalid data.");
 }

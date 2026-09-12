@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Text;
 using ReservePane.Core;
 using ReservePane.Providers;
@@ -7,7 +6,7 @@ using ReservePane.Tests.Support;
 namespace ReservePane.Tests.Providers;
 
 [Collection(ProcessEnvironmentCollection.Name)]
-public sealed class OpenCodeConsoleAccountReaderTests
+public sealed class OpenCodeConsoleQueryRunnerTests
 {
     [Fact]
     public void CreateStartInfo_UsesTheWindowsCommandShimWithFixedArgumentOrder()
@@ -16,7 +15,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         const string query = "select 1 as ok;";
 
         System.Diagnostics.ProcessStartInfo startInfo =
-            OpenCodeConsoleAccountReader.CreateStartInfo(query);
+            OpenCodeConsoleQueryRunner.CreateStartInfo(query);
 
         Assert.EndsWith("cmd.exe", startInfo.FileName, StringComparison.OrdinalIgnoreCase);
         Assert.False(startInfo.UseShellExecute);
@@ -42,7 +41,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         {
             Environment.SetEnvironmentVariable("PATH", refreshedPath);
             Environment.SetEnvironmentVariable("PATHEXT", refreshedPathExtensions);
-            startInfo = OpenCodeConsoleAccountReader.CreateStartInfo("select 1;");
+            startInfo = OpenCodeConsoleQueryRunner.CreateStartInfo("select 1;");
         }
         finally
         {
@@ -77,7 +76,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         EffectiveCommandEnvironment environment = EffectiveCommandEnvironment.Capture(ReadVariable);
 
         System.Diagnostics.ProcessStartInfo startInfo =
-            OpenCodeConsoleAccountReader.CreateStartInfo("select 1;", environment);
+            OpenCodeConsoleQueryRunner.CreateStartInfo("select 1;", environment);
 
         Assert.Equal(
             @"C:\process-tools;C:\user-tools;C:\machine-tools",
@@ -86,110 +85,23 @@ public sealed class OpenCodeConsoleAccountReaderTests
     }
 
     [Fact]
-    public async Task ReadAsync_SelectsOnlyRequiredFieldsAndMapsAccounts()
-    {
-        // Catches credential discovery selecting unrelated identity or refresh-token data.
-        string? capturedQuery = null;
-        var reader = new OpenCodeConsoleAccountReader((query, _) =>
-        {
-            capturedQuery = query;
-            return Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes(
-                """
-                [{"id":"account_test","url":"https://opencode.ai/console","access_token":"access-test","token_expiry":1787832000000}]
-                """));
-        });
-
-        ImmutableArray<OpenCodeConsoleAccount> accounts = await reader.ReadAsync(CancellationToken.None);
-
-        OpenCodeConsoleAccount account = Assert.Single(accounts);
-        Assert.Equal("account_test", account.AccountId);
-        Assert.Equal("access-test", account.AccessToken);
-        Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1787832000000), account.ExpiresAt);
-        Assert.NotNull(capturedQuery);
-        Assert.DoesNotContain("email", capturedQuery, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("refresh_token", capturedQuery, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("active_org_id", capturedQuery, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(
-            "where a.url = 'https://opencode.ai/console'",
-            capturedQuery,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ReadAsync_MissingCommandReturnsNoAccounts()
-    {
-        // Catches a missing OpenCode installation becoming an alert or exception.
-        var reader = new OpenCodeConsoleAccountReader((_, _) => Task.FromResult<byte[]?>(null));
-
-        ImmutableArray<OpenCodeConsoleAccount> accounts = await reader.ReadAsync(CancellationToken.None);
-
-        Assert.Empty(accounts);
-    }
-
-    [Theory]
-    [InlineData("http://opencode.ai/console")]
-    [InlineData("https://example.test/console")]
-    [InlineData("https://opencode.ai/other")]
-    public async Task ReadAsync_NonConsoleAccountUrlIsIgnored(string url)
-    {
-        // Catches a database-controlled URL receiving the Console access token.
-        string json = $$"""
-            [{"id":"account_test","url":"{{url}}","access_token":"access-test","token_expiry":null}]
-            """;
-        var reader = Reader(json);
-
-        ImmutableArray<OpenCodeConsoleAccount> accounts = await reader.ReadAsync(CancellationToken.None);
-
-        Assert.Empty(accounts);
-    }
-
-    [Fact]
-    public async Task ReadAsync_RejectsMoreThanMaximumAccounts()
-    {
-        // Catches unbounded account discovery caused by corrupt or hostile local data.
-        string rows = string.Join(
-            ',',
-            Enumerable.Range(0, 33).Select(index =>
-                $"{{\"id\":\"account_{index}\",\"url\":\"https://opencode.ai/console\",\"access_token\":\"access-{index}\",\"token_expiry\":null}}"));
-        var reader = Reader($"[{rows}]");
-
-        InvalidDataException exception = await Assert.ThrowsAsync<InvalidDataException>(
-            () => reader.ReadAsync(CancellationToken.None));
-
-        Assert.DoesNotContain("access-", exception.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ReadAsync_RejectsOversizedOrMalformedOutputWithoutLeakingIt()
-    {
-        // Catches child-process output bypassing bounds or escaping through parse errors.
-        byte[] oversized = Encoding.UTF8.GetBytes(new string('x', 1_048_577));
-        var oversizedReader = new OpenCodeConsoleAccountReader((_, _) => Task.FromResult<byte[]?>(oversized));
-        var malformedReader = Reader("[{\"access_token\":\"sensitive-test-token\"");
-
-        InvalidDataException oversizedError = await Assert.ThrowsAsync<InvalidDataException>(
-            () => oversizedReader.ReadAsync(CancellationToken.None));
-        InvalidDataException malformedError = await Assert.ThrowsAsync<InvalidDataException>(
-            () => malformedReader.ReadAsync(CancellationToken.None));
-
-        Assert.DoesNotContain("sensitive", oversizedError.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("sensitive-test-token", malformedError.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ReadAsync_CallerCancellationPropagates()
+    public async Task RunWithDatabaseBusyRetryAsync_CallerCancellationPropagates()
     {
         // Catches the child command outliving the provider timeout or application shutdown.
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reader = new OpenCodeConsoleAccountReader(async (_, cancellationToken) =>
+        async Task<byte[]?> RunOnce(string query, CancellationToken cancellationToken)
         {
             started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return null;
-        });
+        }
+
         using var cancellation = new CancellationTokenSource();
 
-        Task<ImmutableArray<OpenCodeConsoleAccount>> read = reader.ReadAsync(cancellation.Token);
+        Task<byte[]?> read = OpenCodeConsoleQueryRunner.RunWithDatabaseBusyRetryAsync(
+            RunOnce,
+            "select 1;",
+            cancellation.Token);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(1));
         cancellation.Cancel();
 
@@ -208,7 +120,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         var environment = new EffectiveCommandEnvironment(directory.Path, ".CMD");
 
         OpenCodeCommandException exception = await Assert.ThrowsAsync<OpenCodeCommandException>(
-            () => OpenCodeConsoleAccountReader.RunQueryAsync(
+            () => OpenCodeConsoleQueryRunner.RunQueryAsync(
                 "select 1;",
                 environment,
                 CancellationToken.None));
@@ -255,7 +167,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         // Break caught: a SQLite lock held by a running opencode instance discards valid quota data.
         int attempts = 0;
 
-        byte[]? output = await OpenCodeConsoleAccountReader.RunWithDatabaseBusyRetryAsync(
+        byte[]? output = await OpenCodeConsoleQueryRunner.RunWithDatabaseBusyRetryAsync(
             (_, _) =>
             {
                 attempts++;
@@ -280,7 +192,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         int attempts = 0;
 
         OpenCodeCommandException exception = await Assert.ThrowsAsync<OpenCodeCommandException>(
-            () => OpenCodeConsoleAccountReader.RunWithDatabaseBusyRetryAsync(
+            () => OpenCodeConsoleQueryRunner.RunWithDatabaseBusyRetryAsync(
                 (_, _) =>
                 {
                     attempts++;
@@ -300,7 +212,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         int attempts = 0;
 
         OpenCodeCommandException exception = await Assert.ThrowsAsync<OpenCodeCommandException>(
-            () => OpenCodeConsoleAccountReader.RunWithDatabaseBusyRetryAsync(
+            () => OpenCodeConsoleQueryRunner.RunWithDatabaseBusyRetryAsync(
                 (_, _) =>
                 {
                     attempts++;
@@ -321,7 +233,7 @@ public sealed class OpenCodeConsoleAccountReaderTests
         using var cancellation = new CancellationTokenSource();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => OpenCodeConsoleAccountReader.RunWithDatabaseBusyRetryAsync(
+            () => OpenCodeConsoleQueryRunner.RunWithDatabaseBusyRetryAsync(
                 (_, token) =>
                 {
                     attempts++;
@@ -332,7 +244,4 @@ public sealed class OpenCodeConsoleAccountReaderTests
                 "select 1;",
                 cancellation.Token));
     }
-
-    private static OpenCodeConsoleAccountReader Reader(string json) => new(
-        (_, _) => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes(json)));
 }

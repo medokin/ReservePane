@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/medokin/ReservePane/compare/v0.4.1...v0.4.2) (2026-09-12)
+
+
+### Bug Fixes
+
+* **ollama:** display monthly usage percentages ([#49](https://github.com/medokin/ReservePane/issues/49)) ([e03faaf](https://github.com/medokin/ReservePane/commit/e03faaf9b241aea6f807ce862f94c0de64e5cbd8))
+
 ## [0.4.1](https://github.com/medokin/ReservePane/compare/v0.4.0...v0.4.1) (2026-09-12)
 
 

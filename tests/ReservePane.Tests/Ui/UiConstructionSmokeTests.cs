@@ -111,6 +111,45 @@ public sealed class UiConstructionSmokeTests
         Assert.DoesNotContain(visibleText, text => text.Contains("organization", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void ProviderCard_UnknownUsageIsExplicitAndRecoversWhenRefreshed()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var card = new ProviderCard();
+                foreach ((double? percent, string expectedText) in new (double?, string)[]
+                    { (null, "Unavailable"), (0, "0%"), (25.5, "25.5%"), (null, "Unavailable") })
+                {
+                    card.Snapshot = new ProviderSnapshot("sample", "Sample", HealthState.Ok, null,
+                        [new UsageWindow("Monthly", percent, null, Severity.Normal)], [], null,
+                        DateTimeOffset.UtcNow, 0);
+                    card.Measure(new Size(327, double.PositiveInfinity));
+                    card.Arrange(new Rect(0, 0, 327, card.DesiredSize.Height));
+                    card.UpdateLayout();
+
+                    string[] text = Descendants<TextBlock>(card).Select(block => block.Text).ToArray();
+                    Assert.Contains(expectedText, text);
+                    Assert.DoesNotContain("%", text);
+                    Border runway = Assert.Single(Descendants<Border>(card),
+                        border => border.Height == 6 && border.DataContext is UsageWindow);
+                    Assert.Equal(percent is null ? Visibility.Collapsed : Visibility.Visible, runway.Visibility);
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The STA rendering thread did not finish.");
+        Assert.Null(failure);
+    }
+
     private static IEnumerable<T> Descendants<T>(DependencyObject root)
         where T : DependencyObject
     {

@@ -107,7 +107,17 @@ public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRe
 
                 using JsonDocument document = await ProviderHttpSafety.ReadJsonAsync(response, cancellationToken)
                     .ConfigureAwait(false);
-                return ParseUsage(document.RootElement, fetchedAt);
+                ProviderFetchResult usageResult = ParseUsage(document.RootElement, fetchedAt);
+                if (usageResult.Snapshot?.Windows.Any(window => window.Label == "Monthly") != true)
+                {
+                    return usageResult;
+                }
+
+                JsonElement monthlyUsage = document.RootElement.GetProperty("limits").GetProperty("monthly")
+                    .GetProperty("usage");
+                decimal? monthlyFraction = monthlyUsage.TryGetDecimal(out decimal fraction) ? fraction : null;
+                return await AddMonthlyBudgetAsync(client, identity, usageResult, monthlyFraction, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (HttpRequestException)
             {
@@ -117,6 +127,108 @@ public sealed class OllamaProvider : IStatusProvider, IProviderAvailability, IRe
             {
                 return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
             }
+        }
+    }
+
+    private async Task<ProviderFetchResult> AddMonthlyBudgetAsync(HttpClient client, OllamaIdentity identity,
+        ProviderFetchResult usageResult, decimal? monthlyFraction, CancellationToken cancellationToken)
+    {
+        ProviderSnapshot snapshot = usageResult.Snapshot!;
+        try
+        {
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+            using HttpRequestMessage request = identity.CreateAccountRequest(now);
+            using HttpResponseMessage response = await client.SendAsync(request,
+                HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                return new ProviderFetchResult(ProviderFetchOutcome.AuthenticationRequired,
+                    snapshot with { Health = HealthState.AuthExpired, Error = "re-auth: run ollama signin" },
+                    response.StatusCode);
+            }
+
+            TimeSpan? retryAfter = ProviderHttpSafety.GetRetryAfter(response, now);
+            if (retryAfter is not null)
+            {
+                return new ProviderFetchResult(ProviderFetchOutcome.RateLimited,
+                    statusCode: response.StatusCode, retryAfter: retryAfter);
+            }
+
+            if (!response.IsSuccessStatusCode) return PlanUnavailable(snapshot, response.StatusCode);
+
+            using JsonDocument document = await ProviderHttpSafety.ReadJsonAsync(response, cancellationToken)
+                .ConfigureAwait(false);
+            (string? label, decimal? budget) = ReadPlan(document.RootElement);
+            snapshot = snapshot with { PlanLabel = label };
+            if (budget is not decimal allowance)
+            {
+                return new ProviderFetchResult(usageResult.Outcome, snapshot);
+            }
+
+            decimal? estimatedSpend = EstimateSpend(monthlyFraction, allowance);
+            snapshot = snapshot with
+            {
+                Info =
+                [
+                    new InfoLine("Estimated spend", estimatedSpend is decimal spend ? FormatUsd(spend) : "Unavailable"),
+                    new InfoLine("Budget", FormatUsd(allowance)),
+                ],
+            };
+            return estimatedSpend is null
+                ? new ProviderFetchResult(ProviderFetchOutcome.PartialSuccess,
+                    snapshot with { Health = HealthState.Degraded, Error = "Spend estimate is unavailable" })
+                : new ProviderFetchResult(usageResult.Outcome, snapshot);
+        }
+        catch (HttpRequestException)
+        {
+            return PlanUnavailable(snapshot);
+        }
+        catch (InvalidDataException)
+        {
+            return PlanUnavailable(snapshot);
+        }
+        catch (IOException)
+        {
+            return PlanUnavailable(snapshot);
+        }
+    }
+
+    private static (string? Label, decimal? Budget) ReadPlan(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) throw new InvalidDataException("Invalid account metadata.");
+        if (!root.TryGetProperty("Plan", out JsonElement plan) && !root.TryGetProperty("plan", out plan))
+            return (null, null);
+        if (plan.ValueKind != JsonValueKind.String) throw new InvalidDataException("Invalid account plan.");
+
+        // Published monthly included allowances, not subscription prices:
+        // https://ollama.com/blog/transparent-pricing (2026-08-31).
+        return plan.GetString()!.Trim().ToLowerInvariant() switch
+        {
+            "pro" => ("Pro", 60m),
+            "max" => ("Max", 300m),
+            "team" => ("Team", 1000m),
+            "free" => ("Free", null),
+            _ => (null, null),
+        };
+    }
+
+    private static ProviderFetchResult PlanUnavailable(ProviderSnapshot snapshot, HttpStatusCode? statusCode = null) =>
+        new(ProviderFetchOutcome.PartialSuccess,
+            snapshot with { Health = HealthState.Degraded, Error = "Plan unavailable. Refresh to retry." }, statusCode);
+
+    private static string FormatUsd(decimal value) => FormattableString.Invariant($"USD {value:0.00}");
+
+    private static decimal? EstimateSpend(decimal? fraction, decimal allowance)
+    {
+        try
+        {
+            return fraction is decimal used
+                ? decimal.Round(used * allowance, 2, MidpointRounding.AwayFromZero)
+                : null;
+        }
+        catch (OverflowException)
+        {
+            return null;
         }
     }
 

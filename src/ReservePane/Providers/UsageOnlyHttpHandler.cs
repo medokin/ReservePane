@@ -25,20 +25,30 @@ internal sealed class UsageOnlyHttpHandler(HttpMessageHandler innerHandler) : De
 
     private static void ValidateRequest(HttpRequestMessage request)
     {
-        if (request.Method != HttpMethod.Get ||
-            request.Content is not null ||
+        if (request.Content is not null ||
             request.RequestUri is not { IsAbsoluteUri: true } uri ||
             uri.Scheme != Uri.UriSchemeHttps ||
             !uri.IsDefaultPort ||
             uri.UserInfo.Length != 0 ||
             uri.Fragment.Length != 0 ||
-            !IsAllowedEndpoint(uri))
+            !IsAllowedEndpoint(request.Method, uri))
         {
             throw new InvalidOperationException("Only approved provider usage and account metadata requests are allowed.");
         }
     }
 
-    private static bool IsAllowedEndpoint(Uri uri) => uri.Host switch
+    private static bool IsAllowedEndpoint(HttpMethod method, Uri uri)
+    {
+        if (method == HttpMethod.Post)
+        {
+            return uri.Host == "ollama.com" &&
+                uri.AbsolutePath == "/api/me" && IsTimestampQuery(uri.Query);
+        }
+
+        return method == HttpMethod.Get && IsAllowedGetEndpoint(uri);
+    }
+
+    private static bool IsAllowedGetEndpoint(Uri uri) => uri.Host switch
     {
         "api.anthropic.com" => uri.Query.Length == 0 &&
             uri.AbsolutePath is "/api/oauth/usage" or "/api/oauth/profile",

@@ -112,6 +112,61 @@ public sealed class UiConstructionSmokeTests
     }
 
     [Fact]
+    public void ProviderCard_OllamaMaxSnapshotRendersEstimatedBudgetAtPopupWidth()
+    {
+        // Catches missing budget metadata or overlapping labels and values at the narrow card width.
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var card = new ProviderCard
+                {
+                    Snapshot = new ProviderSnapshot("ollama", "Ollama Cloud", HealthState.Ok, "Max",
+                        [new UsageWindow("Monthly", 37.5, null, Severity.Normal)],
+                        [new InfoLine("Estimated spend", "USD 112.50"), new InfoLine("Budget", "USD 300.00")],
+                        null, DateTimeOffset.UtcNow, 0),
+                };
+                card.Measure(new Size(327, double.PositiveInfinity));
+                card.Arrange(new Rect(0, 0, 327, card.DesiredSize.Height));
+                card.UpdateLayout();
+
+                TextBlock[] blocks = Descendants<TextBlock>(card).ToArray();
+                Rect cardBounds = new(0, 0, 327, card.ActualHeight);
+                foreach ((string label, string value) in new[]
+                    {
+                        ("Ollama Cloud", "Max"),
+                        ("Monthly", "37.5%"),
+                        ("Estimated spend", "USD 112.50"),
+                        ("Budget", "USD 300.00"),
+                    })
+                {
+                    TextBlock labelBlock = Assert.Single(blocks, block => block.Text == label);
+                    TextBlock valueBlock = Assert.Single(blocks, block => block.Text == value);
+                    Assert.Equal(Visibility.Visible, labelBlock.Visibility);
+                    Assert.Equal(Visibility.Visible, valueBlock.Visibility);
+                    Rect labelBounds = labelBlock.TransformToAncestor(card)
+                        .TransformBounds(new Rect(new Point(), labelBlock.RenderSize));
+                    Rect valueBounds = valueBlock.TransformToAncestor(card)
+                        .TransformBounds(new Rect(new Point(), valueBlock.RenderSize));
+                    Assert.True(cardBounds.Contains(labelBounds), $"The {label} label extends outside the card.");
+                    Assert.True(cardBounds.Contains(valueBounds), $"The {value} value extends outside the card.");
+                    Assert.True(labelBounds.Right < valueBounds.Left, $"The {label} label overlaps its value.");
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "The STA budget rendering thread did not finish.");
+        Assert.Null(failure);
+    }
+
+    [Fact]
     public void ProviderCard_UnknownUsageIsExplicitAndRecoversWhenRefreshed()
     {
         Exception? failure = null;

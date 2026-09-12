@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0](https://github.com/medokin/ReservePane/compare/v0.5.0...v0.6.0) (2026-09-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **opencode:** follow the active workspace automatically
+
+### Features
+
+* **opencode:** follow the active workspace automatically ([89cc076](https://github.com/medokin/ReservePane/commit/89cc07663aa79aca8d7afeb8f785210224e8ac9f))
+
+
+### Bug Fixes
+
+* **claude:** reduce usage polling frequency ([#55](https://github.com/medokin/ReservePane/issues/55)) ([5edffc0](https://github.com/medokin/ReservePane/commit/5edffc01bc5a7b81887ad82d9b3a0b5a075e5e43))
+
 ## [0.5.0](https://github.com/medokin/ReservePane/compare/v0.4.2...v0.5.0) (2026-09-12)
 
 

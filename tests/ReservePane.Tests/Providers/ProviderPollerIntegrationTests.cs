@@ -36,13 +36,18 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
                     expiresAt = DateTimeOffset.UtcNow.AddDays(1).ToUnixTimeMilliseconds(),
                 },
             }));
-        var provider = new ClaudeProvider(credentialPath, handler, SeverityFromPercent);
-        StatusPoller poller = CreatePoller(provider);
+        var time = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        var provider = new ClaudeProvider(credentialPath, handler, SeverityFromPercent, time);
+        StatusPoller poller = CreatePoller(provider, time);
 
         ProviderSnapshot good = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot first = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot second = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot third = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot recovered = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
 
         AssertRetained(good, first, HealthState.Ok, 1);
@@ -491,13 +496,16 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
         string credentialPath = _directory.WriteFile(
             "rotating-claude-credentials.json",
             CreateClaudeCredential());
-        var provider = new ClaudeProvider(credentialPath, handler, SeverityFromPercent);
-        StatusPoller poller = CreatePoller(provider);
+        var time = new MutableTimeProvider(DateTimeOffset.UtcNow);
+        var provider = new ClaudeProvider(credentialPath, handler, SeverityFromPercent, time);
+        StatusPoller poller = CreatePoller(provider, time);
         ProviderSnapshot good = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
 
         await File.WriteAllTextAsync(credentialPath, "{\"claudeAiOauth\":{");
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot retained = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
         await File.WriteAllTextAsync(credentialPath, CreateClaudeCredential());
+        time.Advance(TimeSpan.FromMinutes(5));
         ProviderSnapshot recovered = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
 
         AssertRetained(good, retained, HealthState.Ok, 1);
@@ -623,10 +631,11 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
 
     public void Dispose() => _directory.Dispose();
 
-    private StatusPoller CreatePoller(IStatusProvider provider) => new(
+    private StatusPoller CreatePoller(IStatusProvider provider, TimeProvider? timeProvider = null) => new(
         [provider],
         () => AppSettings.Default,
-        new RollingFileLog(Path.Combine(_directory.Path, $"poller-{Guid.NewGuid():N}.log")));
+        new RollingFileLog(Path.Combine(_directory.Path, $"poller-{Guid.NewGuid():N}.log")),
+        timeProvider);
 
     private StatusPoller CreatePoller(IReadOnlyList<IStatusProvider> providers) => new(
         providers,

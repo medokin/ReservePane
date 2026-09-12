@@ -58,12 +58,14 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | INSTALL-05 | Interactive and silent uninstall remove the app, shortcut, Apps & Features entry, and stale `ReservePane` Run value. |  |  |  |
 | INSTALL-06 | Uninstall preserves `%APPDATA%\ReservePane`, including existing settings and logs. |  |  |  |
 | INSTALL-07 | A successful fresh full-UI install starts ReservePane, while silent or basic-UI installs, upgrades, and repairs do not. |  |  |  |
-| POLL-01 | Refresh now starts a new poll without waiting for the normal timer. |  |  |  |
-| POLL-02 | Normal polling cadence is 60 seconds. |  |  |  |
+| POLL-01 | Refresh now starts a new poll without waiting for the normal timer and respects provider refresh spacing and retry delays. |  |  |  |
+| POLL-02 | Normal polling cadence is 60 seconds; Claude usage checks are spaced at least five minutes apart. |  |  |  |
 | POLL-03 | Session lock changes polling cadence to the five-minute backoff. |  |  |  |
-| POLL-04 | Unlock restores the normal 60-second cadence. |  |  |  |
+| POLL-04 | Unlock restores the normal 60-second cadence while preserving Claude's five-minute minimum spacing. |  |  |  |
 | POLL-05 | Battery plus at least five minutes of idle time changes polling cadence to five minutes. |  |  |  |
 | POLL-06 | An RDP reconnect keeps the application responsive and polling. |  |  |  |
+| POLL-07 | Repeated manual refreshes within five minutes of a Claude check keep its last result and original update time while eligible providers refresh. |  |  |  |
+| POLL-08 | After a Claude rate limit clears, its next usage check still waits at least five minutes; a longer server retry delay remains in effect. |  |  |  |
 | AUTH-01 | An expired Claude token shows `re-auth: run claude login`, raises one toast, then remains silent until state changes. |  |  |  |
 | AUTH-02 | An expired Codex token shows `re-auth: run codex login`, raises one toast, then remains silent until state changes. |  |  |  |
 | AUTH-03 | Claude, Codex, Grok, and Ollama CLI credential files have identical before-and-after SHA-256 digests. |  |  |  |

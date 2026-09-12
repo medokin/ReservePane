@@ -8,5 +8,7 @@ public interface IStatusProvider
 
     string Label { get; }
 
+    TimeSpan MinimumRefreshInterval => TimeSpan.Zero;
+
     Task<ProviderFetchResult> FetchAsync(CancellationToken cancellationToken);
 }

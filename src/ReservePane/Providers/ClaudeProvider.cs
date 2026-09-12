@@ -98,6 +98,8 @@ public sealed class ClaudeProvider : IStatusProvider, IProviderAvailability
 
     public string Label => "Claude";
 
+    public TimeSpan MinimumRefreshInterval => TimeSpan.FromMinutes(5);
+
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken) =>
         CredentialFilePrerequisite.IsPresentOrIndeterminateAsync(
             _credentialPath,

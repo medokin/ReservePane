@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/medokin/ReservePane/compare/v0.4.0...v0.4.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* **ui:** show unavailable usage without a misleading meter ([#47](https://github.com/medokin/ReservePane/issues/47)) ([03a7d63](https://github.com/medokin/ReservePane/commit/03a7d6365b4fab6433ab48d10600908146c69607))
+
 ## [0.4.0](https://github.com/medokin/ReservePane/compare/v0.3.0...v0.4.0) (2026-09-11)
 
 

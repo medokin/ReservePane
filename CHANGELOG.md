@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/medokin/ReservePane/compare/v0.4.2...v0.5.0) (2026-09-12)
+
+
+### Features
+
+* **ollama:** show estimated spend and monthly budget ([#51](https://github.com/medokin/ReservePane/issues/51)) ([6295c3b](https://github.com/medokin/ReservePane/commit/6295c3b5b7f7e8ee5a47cb4d57dda2ee079f97bf))
+
 ## [0.4.2](https://github.com/medokin/ReservePane/compare/v0.4.1...v0.4.2) (2026-09-12)
 
 

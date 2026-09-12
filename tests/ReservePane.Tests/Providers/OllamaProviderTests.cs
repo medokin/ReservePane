@@ -105,6 +105,10 @@ public sealed class OllamaProviderTests : IDisposable
     [InlineData("{\"limits\":{\"weekly\":{\"usage\":-1}}}")]
     [InlineData("{\"limits\":{\"weekly\":{\"usage\":1.1}}}")]
     [InlineData("{\"limits\":{\"weekly\":{\"usage\":\"0.5\"}}}")]
+    [InlineData("{\"limits\":{\"monthly\":{\"usage\":null}}}")]
+    [InlineData("{\"limits\":{\"monthly\":{\"usage\":-1}}}")]
+    [InlineData("{\"limits\":{\"monthly\":{\"usage\":\"0.5\"}}}")]
+    [InlineData("{\"limits\":{\"monthly\":{\"usage\":1e308}}}")]
     [InlineData("{\"limits\":")]
     public async Task FetchAsync_InvalidUsageNeverInventsCapacity(string json)
     {
@@ -124,18 +128,43 @@ public sealed class OllamaProviderTests : IDisposable
         Assert.Equal(0, Assert.Single(result.Snapshot!.Windows).Percent);
     }
 
-    [Fact]
-    public async Task FetchAsync_UnconfirmedMonthlyUnitRemainsUnknown()
+    [Theory]
+    [InlineData("0", 0, Severity.Normal)]
+    [InlineData("0.375", 37.5, Severity.Normal)]
+    [InlineData("0.925", 92.5, Severity.Warning)]
+    [InlineData("1", 100, Severity.Warning)]
+    [InlineData("1.125", 112.5, Severity.Warning)]
+    public async Task FetchAsync_MonthlyFractionDisplaysUsedPercentage(string usage, double expectedPercent,
+        Severity expectedSeverity)
     {
         ProviderFetchResult result = await CreateProvider(new StubHttpMessageHandler(_ =>
-            JsonResponse("""{"limits":{"monthly":{"usage":0.4}}}""")))
+            JsonResponse("""{"limits":{"monthly":{"usage":VALUE}}}""".Replace("VALUE", usage))))
             .FetchAsync(CancellationToken.None);
-        Assert.Equal(ProviderFetchOutcome.PartialSuccess, result.Outcome);
+        Assert.Equal(ProviderFetchOutcome.Success, result.Outcome);
         UsageWindow monthly = Assert.Single(result.Snapshot!.Windows);
-        Assert.Equal("Monthly", monthly.Label);
-        Assert.Null(monthly.Percent);
+        Assert.Equal(new UsageWindow("Monthly", expectedPercent, null, expectedSeverity), monthly);
+        Assert.Equal(HealthState.Ok, result.Snapshot.Health);
+        Assert.Null(result.Snapshot.Error);
+    }
+
+    [Fact]
+    public async Task FetchAsync_MonthlyUsageIgnoresUnrelatedActivityCostsAndPeriods()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "ReservePane.slnx")))
+        {
+            directory = directory.Parent;
+        }
+        Assert.NotNull(directory);
+        string fixture = File.ReadAllText(Path.Combine(directory.FullName,
+            "tests", "ReservePane.Tests", "Fixtures", "ollama-cloud-monthly.json"));
+        ProviderFetchResult result = await CreateProvider(new StubHttpMessageHandler(_ => JsonResponse(fixture)))
+            .FetchAsync(CancellationToken.None);
+        Assert.Equal(ProviderFetchOutcome.Success, result.Outcome);
+        UsageWindow monthly = Assert.Single(result.Snapshot!.Windows);
+        Assert.Equal(37.5, monthly.Percent);
         Assert.Null(monthly.ResetsAt);
-        Assert.Equal("Monthly usage format is not supported yet", result.Snapshot.Error);
+        Assert.Empty(result.Snapshot.Info);
     }
 
     [Theory]

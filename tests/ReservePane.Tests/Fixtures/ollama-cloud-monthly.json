@@ -1,0 +1,17 @@
+{
+  "limits": {
+    "monthly": {
+      "usage": 0.375,
+      "models": []
+    }
+  },
+  "activity": {
+    "cost": "0.00000",
+    "period": {
+      "type": "day",
+      "starting_at": "2026-01-12T00:00:00Z",
+      "ending_at": "2026-01-13T00:00:00Z"
+    },
+    "models": []
+  }
+}

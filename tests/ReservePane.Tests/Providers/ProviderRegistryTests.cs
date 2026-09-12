@@ -31,14 +31,6 @@ public sealed class ProviderRegistryTests : IDisposable
                 Assert.Equal("OpenCode", provider.Label);
             },
             provider => Assert.Equal("ollama", provider.Id));
-
-        IStatusProvider[] originalProviders = registry.Providers.ToArray();
-        settings = settings with
-        {
-            Providers = settings.Providers.SetItem("codex", new ProviderSettings()),
-        };
-
-        Assert.Equal(originalProviders, registry.Providers);
     }
 
     [Fact]

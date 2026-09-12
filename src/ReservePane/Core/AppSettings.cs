@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-
 namespace ReservePane.Core;
 
 public enum OverlayCorner
@@ -11,19 +9,11 @@ public enum OverlayCorner
     Custom,
 }
 
-public sealed record OpenCodeConsoleSettings(string? WorkspaceSelector);
-
-public sealed record ProviderSettings
-{
-    public OpenCodeConsoleSettings? OpenCodeConsole { get; init; }
-}
-
 public sealed record OverlayPosition(double X, double Y);
 
 public sealed record AppSettings(
     TimeSpan PollInterval,
     TimeSpan IdleInterval,
-    ImmutableDictionary<string, ProviderSettings> Providers,
     bool OverlayVisible,
     OverlayCorner OverlayCorner,
     string? OverlayMonitorId,
@@ -36,13 +26,6 @@ public sealed record AppSettings(
     public static AppSettings Default { get; } = new(
         TimeSpan.FromSeconds(60),
         TimeSpan.FromMinutes(5),
-        ImmutableDictionary<string, ProviderSettings>.Empty
-            .Add("claude", new ProviderSettings())
-            .Add("codex", new ProviderSettings())
-            .Add("grok", new ProviderSettings())
-            .Add("opencode-go", new ProviderSettings())
-            .Add("opencode-company-seat", new ProviderSettings())
-            .Add("ollama", new ProviderSettings()),
         false,
         OverlayCorner.BottomRight,
         null,

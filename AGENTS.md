@@ -26,6 +26,15 @@ Use four-space indentation in C# and preserve the existing XAML formatting. Null
 
 Tests use xUnit. Name test classes after the subject, such as `StatusPollerTests`, and methods as `Member_ExpectedBehavior` or `Member_Condition_ExpectedBehavior`. Add regression coverage for behavior changes and fixture-based tests for provider parsing. Run the full Release suite; UI tests may require a Windows desktop/STA context. Follow `docs/manual-test-checklist.md` for release candidates.
 
+## Documentation Maintenance
+
+For every change, review `README.md` and relevant documentation under `docs/` for
+affected content. Update documentation in the same change so it matches the
+implemented behavior. This includes setup instructions, configuration examples,
+provider descriptions, screenshots, and manual test checklists where applicable.
+Remove or replace outdated instructions and examples when behavior or features
+change; do not leave documentation updates for a later task.
+
 ## Commit, Pull Request & Release Guidelines
 
 Use Conventional Commits for commits and pull request titles, for example

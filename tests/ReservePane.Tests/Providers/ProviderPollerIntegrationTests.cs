@@ -187,12 +187,7 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
                     OpenCodeCompanySeatFetchOutcome.InvalidResponse,
                     StatusCode: HttpStatusCode.OK)),
             IsOpenCodeCommandAvailable);
-        AppSettings settings = AppSettings.Default with
-        {
-            Providers = AppSettings.Default.Providers.SetItem(
-                provider.Id,
-                new ProviderSettings()),
-        };
+        AppSettings settings = AppSettings.Default;
         var poller = new StatusPoller(
             [provider],
             () => settings,
@@ -643,12 +638,7 @@ public sealed class ProviderPollerIntegrationTests : IDisposable
         TimeSpan? providerTimeout = null,
         TimeProvider? timeProvider = null)
     {
-        AppSettings settings = AppSettings.Default with
-        {
-            Providers = AppSettings.Default.Providers.SetItem(
-                provider.Id,
-                new ProviderSettings()),
-        };
+        AppSettings settings = AppSettings.Default;
         return new StatusPoller(
             [provider],
             () => settings,

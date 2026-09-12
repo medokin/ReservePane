@@ -4,6 +4,7 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ReservePane.Core;
@@ -11,7 +12,7 @@ using ReservePane.Model;
 
 namespace ReservePane.Providers;
 
-public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
+public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability, IRetentionScopedStatusProvider
 {
     private static readonly Uri UsageUri = new("https://opencode.ai/zen/go/v1/usage");
     private readonly string _credentialPath;
@@ -19,11 +20,12 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
     private readonly Func<double?, Severity> _severityFromPercent;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string, Stream> _openCredential;
-    private readonly Func<string?> _getWorkspaceSelector;
-    private readonly IOpenCodeConsoleAccountReader _consoleAccountReader;
+    private readonly IOpenCodeConsoleActiveWorkspaceReader _workspaceReader;
     private readonly IOpenCodeConsoleGoClient _consoleClient;
     private readonly Func<string, bool> _credentialProbe;
     private readonly Func<string, bool> _commandAvailable;
+    private readonly object _selectionGate = new();
+    private ProviderRetentionScope _retentionScope = ProviderRetentionScope.Unknown;
 
     public OpenCodeGoProvider(
         string credentialPath,
@@ -46,26 +48,7 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
             severityFromPercent,
             timeProvider,
             openCredential,
-            () => null,
-            new OpenCodeConsoleAccountReader(),
-            new OpenCodeConsoleGoClient(handler, severityFromPercent, timeProvider))
-    {
-    }
-
-    internal OpenCodeGoProvider(
-        string credentialPath,
-        HttpMessageHandler handler,
-        Func<double?, Severity> severityFromPercent,
-        Func<string?> getWorkspaceSelector,
-        TimeProvider? timeProvider = null)
-        : this(
-            credentialPath,
-            handler,
-            severityFromPercent,
-            timeProvider,
-            OpenCredentialStream,
-            getWorkspaceSelector,
-            new OpenCodeConsoleAccountReader(),
+            new OpenCodeConsoleActiveWorkspaceReader(),
             new OpenCodeConsoleGoClient(handler, severityFromPercent, timeProvider))
     {
     }
@@ -76,8 +59,7 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
         Func<double?, Severity> severityFromPercent,
         TimeProvider? timeProvider,
         Func<string, Stream> openCredential,
-        Func<string?> getWorkspaceSelector,
-        IOpenCodeConsoleAccountReader consoleAccountReader,
+        IOpenCodeConsoleActiveWorkspaceReader workspaceReader,
         IOpenCodeConsoleGoClient consoleClient)
         : this(
             credentialPath,
@@ -85,8 +67,7 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
             severityFromPercent,
             timeProvider,
             openCredential,
-            getWorkspaceSelector,
-            consoleAccountReader,
+            workspaceReader,
             consoleClient,
             CredentialFilePrerequisite.Probe,
             CommandAvailability.IsAvailable)
@@ -99,8 +80,7 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
         Func<double?, Severity> severityFromPercent,
         TimeProvider? timeProvider,
         Func<string, Stream> openCredential,
-        Func<string?> getWorkspaceSelector,
-        IOpenCodeConsoleAccountReader consoleAccountReader,
+        IOpenCodeConsoleActiveWorkspaceReader workspaceReader,
         IOpenCodeConsoleGoClient consoleClient,
         Func<string, bool> credentialProbe,
         Func<string, bool> commandAvailable)
@@ -110,8 +90,7 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
         _severityFromPercent = severityFromPercent;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _openCredential = openCredential;
-        _getWorkspaceSelector = getWorkspaceSelector;
-        _consoleAccountReader = consoleAccountReader;
+        _workspaceReader = workspaceReader;
         _consoleClient = consoleClient;
         _credentialProbe = credentialProbe;
         _commandAvailable = commandAvailable;
@@ -120,6 +99,17 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
     public string Id => "opencode-go";
 
     public string Label => "OpenCode Go";
+
+    ProviderRetentionScope IRetentionScopedStatusProvider.RetentionScope
+    {
+        get
+        {
+            lock (_selectionGate)
+            {
+                return _retentionScope;
+            }
+        }
+    }
 
     public Task<bool> IsAvailableAsync(CancellationToken cancellationToken)
     {
@@ -142,6 +132,33 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
     public async Task<ProviderFetchResult> FetchAsync(CancellationToken cancellationToken)
     {
         DateTimeOffset fetchedAt = _timeProvider.GetUtcNow();
+        (string? apiKey, OpenCodeConsoleActiveWorkspaceReadResult? workspaceResult) =
+            await ReadSelectionAsync(cancellationToken).ConfigureAwait(false);
+        return apiKey is not null
+            ? await FetchApiKeyAsync(apiKey, fetchedAt, cancellationToken).ConfigureAwait(false)
+            : await FetchConsoleAsync(workspaceResult!, fetchedAt, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<ProviderRetentionScopeRefreshOutcome> IRetentionScopedStatusProvider
+        .RefreshRetentionScopeAsync(CancellationToken cancellationToken)
+    {
+        (_, OpenCodeConsoleActiveWorkspaceReadResult? workspaceResult) =
+            await ReadSelectionAsync(cancellationToken).ConfigureAwait(false);
+        return workspaceResult?.Outcome switch
+        {
+            OpenCodeConsoleActiveWorkspaceReadOutcome.TransientFailure =>
+                ProviderRetentionScopeRefreshOutcome.TransientFailure,
+            OpenCodeConsoleActiveWorkspaceReadOutcome.InvalidResponse =>
+                ProviderRetentionScopeRefreshOutcome.InvalidResponse,
+            _ => ProviderRetentionScopeRefreshOutcome.Success,
+        };
+    }
+
+    private async Task<(string? ApiKey, OpenCodeConsoleActiveWorkspaceReadResult? WorkspaceResult)>
+        ReadSelectionAsync(CancellationToken cancellationToken)
+    {
+        SetRetentionScope(ProviderRetentionScope.Unknown);
+        cancellationToken.ThrowIfCancellationRequested();
         string? apiKey;
         try
         {
@@ -154,16 +171,31 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
 
         if (apiKey is not null)
         {
-            return await FetchApiKeyAsync(apiKey, fetchedAt, cancellationToken).ConfigureAwait(false);
+            SetRetentionScope(ProviderRetentionScope.Known("api:" + HashSelection(apiKey)));
+            return (apiKey, null);
         }
 
-        if (!_commandAvailable("opencode"))
-        {
-            return NotConfigured(fetchedAt);
-        }
-
-        return await FetchConsoleAsync(_getWorkspaceSelector(), fetchedAt, cancellationToken).ConfigureAwait(false);
+        OpenCodeConsoleActiveWorkspaceReadResult result = _commandAvailable("opencode")
+            ? await _workspaceReader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            : new(OpenCodeConsoleActiveWorkspaceReadOutcome.Success);
+        SetRetentionScope(result.Outcome == OpenCodeConsoleActiveWorkspaceReadOutcome.Success
+            ? ProviderRetentionScope.Known(result.Workspace is { } workspace
+                ? "console:" + HashSelection(workspace.AccountId + "\0" + workspace.OrganizationId)
+                : null)
+            : ProviderRetentionScope.Unknown);
+        return (null, result);
     }
+
+    private void SetRetentionScope(ProviderRetentionScope scope)
+    {
+        lock (_selectionGate)
+        {
+            _retentionScope = scope;
+        }
+    }
+
+    private static string HashSelection(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private async Task<ProviderFetchResult> FetchApiKeyAsync(
         string apiKey,
@@ -228,70 +260,46 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
     }
 
     private async Task<ProviderFetchResult> FetchConsoleAsync(
-        string? workspaceSelector,
+        OpenCodeConsoleActiveWorkspaceReadResult workspaceResult,
         DateTimeOffset fetchedAt,
         CancellationToken cancellationToken)
     {
-        ImmutableArray<OpenCodeConsoleAccount> discovered;
-        try
+        if (workspaceResult.Outcome != OpenCodeConsoleActiveWorkspaceReadOutcome.Success)
         {
-            discovered = await _consoleAccountReader.ReadAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (InvalidDataException)
-        {
-            return new ProviderFetchResult(ProviderFetchOutcome.InvalidResponse);
+            return new ProviderFetchResult(
+                workspaceResult.Outcome == OpenCodeConsoleActiveWorkspaceReadOutcome.InvalidResponse
+                    ? ProviderFetchOutcome.InvalidResponse
+                    : ProviderFetchOutcome.TransientFailure,
+                preserveLastGoodData: false);
         }
 
-        if (discovered.IsEmpty)
+        OpenCodeConsoleActiveWorkspace? workspace = workspaceResult.Workspace;
+        if (workspace is null)
         {
             return NotConfigured(fetchedAt);
         }
 
-        ImmutableArray<OpenCodeConsoleAccount> current = discovered
-            .Where(account => account.ExpiresAt is null || account.ExpiresAt > fetchedAt)
-            .ToImmutableArray();
-        if (current.IsEmpty)
+        if (workspace.ExpiresAt is DateTimeOffset expiresAt && expiresAt <= fetchedAt)
         {
             return ConsoleAuthenticationRequired(fetchedAt);
         }
 
         OpenCodeConsoleFetchResult result = await _consoleClient
-            .FetchAsync(current, cancellationToken, workspaceSelector)
+            .FetchAsync(workspace, cancellationToken)
             .ConfigureAwait(false);
         if (result.Outcome != OpenCodeConsoleFetchOutcome.Success)
         {
             return MapConsoleFailure(result, fetchedAt);
         }
 
-        if (result.Workspaces.IsEmpty)
+        if (result.Windows.IsEmpty)
         {
-            return workspaceSelector is null
-                ? NotConfigured(fetchedAt)
-                : SelectionRequired([], fetchedAt);
-        }
-
-        OpenCodeConsoleWorkspace? selected;
-        if (workspaceSelector is string selector)
-        {
-            selected = result.Workspaces.FirstOrDefault(workspace =>
-                string.Equals(workspace.Selector, selector, StringComparison.Ordinal));
-            if (selected is null)
-            {
-                return SelectionRequired(result.Workspaces, fetchedAt);
-            }
-        }
-        else if (result.Workspaces.Length == 1)
-        {
-            selected = result.Workspaces[0];
-        }
-        else
-        {
-            return SelectionRequired(result.Workspaces, fetchedAt);
+            return NotConfigured(fetchedAt);
         }
 
         return new ProviderFetchResult(
             ProviderFetchOutcome.Success,
-            Snapshot(HealthState.Ok, selected.Windows, null, fetchedAt),
+            Snapshot(HealthState.Ok, result.Windows, null, fetchedAt),
             result.StatusCode);
     }
 
@@ -320,32 +328,6 @@ public sealed class OpenCodeGoProvider : IStatusProvider, IProviderAvailability
         ProviderFetchOutcome.AuthenticationRequired,
         Snapshot(HealthState.AuthExpired, [], "re-auth: run opencode console login", fetchedAt),
         statusCode);
-
-    private static ProviderFetchResult SelectionRequired(
-        ImmutableArray<OpenCodeConsoleWorkspace> workspaces,
-        DateTimeOffset fetchedAt)
-    {
-        const string settingPath = "Providers.opencode-go.OpenCodeConsole.WorkspaceSelector";
-        if (workspaces.IsEmpty)
-        {
-            return new ProviderFetchResult(
-                ProviderFetchOutcome.NotConfigured,
-                Snapshot(
-                    HealthState.Unreachable,
-                    [],
-                    $"configured {settingPath} is not available",
-                    fetchedAt));
-        }
-
-        string selectors = string.Join(", ", workspaces.Select(workspace => workspace.Selector));
-        return new ProviderFetchResult(
-            ProviderFetchOutcome.NotConfigured,
-            Snapshot(
-                HealthState.Unreachable,
-                [],
-                $"set {settingPath} to one of: {selectors}",
-                fetchedAt));
-    }
 
     private string? ReadApiKey()
     {

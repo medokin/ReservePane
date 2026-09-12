@@ -117,34 +117,30 @@ procedure.
 
 ## Configuration
 
-ReservePane creates `%APPDATA%\ReservePane\settings.json` on first launch. The
-defaults poll once per minute while active, use 80 and 95 percent warning
-thresholds, keep the overlay hidden, and leave autostart disabled.
+Settings are stored at `%APPDATA%\ReservePane\settings.json`. Open **Settings
+file** in the tray menu to create the file if needed and open it for editing.
+Valid saved changes reload automatically. The defaults poll once per minute
+while active, use 80 and 95 percent warning thresholds, keep the overlay hidden,
+and leave autostart disabled.
 
-When no `opencode-go` API key exists, ReservePane automatically discovers
-OpenCode Console through the local `opencode` command. No provider setting is
-required. If several workspaces expose Go quota, use their stable selector to
-choose one:
+OpenCode Go and OpenCode Company Seat automatically follow the active Console
+account and workspace through the local `opencode` command. No provider setting
+is required. Switching the active account or workspace in OpenCode takes effect
+on the next poll. A configured `opencode-go` API key always takes precedence over
+Console discovery for Go.
 
-```json
-"opencode-go": {
-  "OpenCodeConsole": {
-    "WorkspaceSelector": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  }
-}
-```
+For Console monitoring, usage from the previous account or workspace is cleared
+when the active selection changes or cannot be read. Existing provider retry
+delays still apply, including after switching workspaces.
 
 ReservePane reads the OpenCode account database through the read-only
-`opencode db` command and keeps access tokens in memory only. A configured
-`opencode-go` API key always takes precedence. A single workspace with Go quota
-is selected automatically. If several are eligible, the provider card lists the
-stable selector values accepted by `WorkspaceSelector`.
+`opencode db` command and keeps identifiers and access tokens in memory only.
+Console monitoring uses OpenCode's private contract and fails safely if the
+unsupported contract changes. Company Seat values show the member's budget.
 
-OpenCode Company Seat monitoring is discovered automatically from the active
-Console account and workspace. It uses OpenCode's private Console contract,
-keeps identifiers and the access token in memory, and fails safely if the
-unsupported contract changes. The displayed values are member budget data, not
-organization-wide totals.
+Legacy `Providers` configuration, including `OpenCodeConsole` and
+`WorkspaceSelector`, is ignored and removed on the next settings save. Other
+preferences are preserved.
 
 Runtime logs are written to `%APPDATA%\ReservePane\log.txt`. Logs contain status
 categories only, not exception messages, headers, bodies, tokens, account IDs,

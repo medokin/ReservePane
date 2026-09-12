@@ -36,7 +36,7 @@ internal sealed class OpenCodeConsoleActiveWorkspaceReader : IOpenCodeConsoleAct
     private readonly Func<string, CancellationToken, Task<byte[]?>> _runQuery;
 
     public OpenCodeConsoleActiveWorkspaceReader()
-        : this(OpenCodeConsoleAccountReader.RunQueryAsync)
+        : this(OpenCodeConsoleQueryRunner.RunQueryAsync)
     {
     }
 

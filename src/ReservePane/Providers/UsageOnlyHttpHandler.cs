@@ -57,7 +57,7 @@ internal sealed class UsageOnlyHttpHandler(HttpMessageHandler innerHandler) : De
         "cli-chat-proxy.grok.com" => uri.AbsolutePath == "/v1/billing" &&
             uri.Query == "?format=credits",
         "opencode.ai" => uri.Query.Length == 0 &&
-            (uri.AbsolutePath is "/console/api/orgs" or "/console/api/orgs/current" or
+            (uri.AbsolutePath is "/console/api/orgs/current" or
                 "/console/api/go/status" or "/zen/go/v1/usage" ||
                 IsMemberBudgetPath(uri.AbsolutePath)),
         "ollama.com" => uri.AbsolutePath == "/api/usage" && IsTimestampQuery(uri.Query),

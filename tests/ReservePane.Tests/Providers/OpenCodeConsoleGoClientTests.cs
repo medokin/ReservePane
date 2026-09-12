@@ -1,6 +1,4 @@
-using System.Collections.Immutable;
 using System.Net;
-using System.Security.Cryptography;
 using System.Text;
 using ReservePane.Model;
 using ReservePane.Providers;
@@ -10,16 +8,36 @@ namespace ReservePane.Tests.Providers;
 
 public sealed class OpenCodeConsoleGoClientTests
 {
-    private static readonly OpenCodeConsoleAccount Account = new(
+    private static readonly OpenCodeConsoleActiveWorkspace Workspace = new(
         "account-test",
         "access-test",
+        "org-test",
         DateTimeOffset.Parse("2026-08-28T00:00:00Z"));
 
     [Fact]
-    public async Task FetchAsync_UsesFixedEndpointsAndMapsGoMeters()
+    public async Task FetchAsync_KnownActiveWorkspaceDoesNotDependOnOrganizationDiscovery()
     {
-        // Catches token routing, selector stability, or private-contract mapping regressions.
-        var requests = new List<(Uri? Uri, string? Bearer, string? OrgId)>();
+        // Catches organization discovery hiding valid usage for the active workspace.
+        var handler = new StubHttpMessageHandler(request =>
+            request.RequestUri?.AbsolutePath == "/console/api/go/status"
+                ? JsonResponse(ValidStatus)
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
+
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(
+            Workspace,
+            CancellationToken.None);
+
+        Assert.Equal(OpenCodeConsoleFetchOutcome.Success, result.Outcome);
+        Assert.Equal(3, result.Windows.Length);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task FetchAsync_UsesActiveWorkspaceAndMapsGoMeters()
+    {
+        // Catches incorrect active workspace routing or private-contract meter mapping.
+        var requests = new List<(Uri? Uri, string? Bearer, string? OrgId, bool? NoStore)>();
         var handler = new StubHttpMessageHandler(request =>
         {
             requests.Add((
@@ -27,37 +45,26 @@ public sealed class OpenCodeConsoleGoClientTests
                 request.Headers.Authorization?.Parameter,
                 request.Headers.TryGetValues("x-org-id", out IEnumerable<string>? values)
                     ? Assert.Single(values)
-                    : null));
-            return request.RequestUri?.AbsolutePath.EndsWith("/orgs", StringComparison.Ordinal) == true
-                ? JsonResponse("[{\"id\":\"org-test\"}]")
-                : JsonResponse(ValidStatus);
+                    : null,
+                request.Headers.CacheControl?.NoStore));
+            return JsonResponse(ValidStatus);
         });
         var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.Success, result.Outcome);
-        OpenCodeConsoleWorkspace workspace = Assert.Single(result.Workspaces);
-        Assert.Equal(Selector("account-test", "org-test"), workspace.Selector);
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
         Assert.Collection(
-            workspace.Windows,
+            result.Windows,
             rolling => AssertWindow(rolling, "rolling", 25, "2026-08-27T13:00:00Z"),
             weekly => AssertWindow(weekly, "weekly", 50, "2026-09-01T00:00:00Z"),
             monthly => AssertWindow(monthly, "monthly", 75, "2026-09-27T00:00:00Z"));
-        Assert.Collection(
-            requests,
-            request =>
-            {
-                Assert.Equal("https://opencode.ai/console/api/orgs", request.Uri?.ToString());
-                Assert.Equal("access-test", request.Bearer);
-                Assert.Null(request.OrgId);
-            },
-            request =>
-            {
-                Assert.Equal("https://opencode.ai/console/api/go/status", request.Uri?.ToString());
-                Assert.Equal("access-test", request.Bearer);
-                Assert.Equal("org-test", request.OrgId);
-            });
+        var request = Assert.Single(requests);
+        Assert.Equal("https://opencode.ai/console/api/go/status", request.Uri?.ToString());
+        Assert.Equal("access-test", request.Bearer);
+        Assert.Equal("org-test", request.OrgId);
+        Assert.True(request.NoStore);
     }
 
     [Theory]
@@ -68,10 +75,10 @@ public sealed class OpenCodeConsoleGoClientTests
         var handler = Handler(JsonResponse(status));
         var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.Success, result.Outcome);
-        Assert.Empty(result.Workspaces);
+        Assert.Empty(result.Windows);
     }
 
     [Fact]
@@ -84,10 +91,9 @@ public sealed class OpenCodeConsoleGoClientTests
             StringComparison.Ordinal);
         var client = new OpenCodeConsoleGoClient(Handler(JsonResponse(status)), SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
-        OpenCodeConsoleWorkspace workspace = Assert.Single(result.Workspaces);
-        UsageWindow rolling = Assert.Single(workspace.Windows, window => window.Label == "rolling");
+        UsageWindow rolling = Assert.Single(result.Windows, window => window.Label == "rolling");
         Assert.Null(rolling.ResetsAt);
     }
 
@@ -102,10 +108,10 @@ public sealed class OpenCodeConsoleGoClientTests
             .Replace("\"usedMicroCents\": \"100\"", $"\"usedMicroCents\": \"{used}\"", StringComparison.Ordinal);
         var client = new OpenCodeConsoleGoClient(Handler(JsonResponse(status)), SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         UsageWindow rolling = Assert.Single(
-            Assert.Single(result.Workspaces).Windows,
+            result.Windows,
             window => window.Label == "rolling");
         Assert.Equal(50, rolling.Percent);
     }
@@ -121,110 +127,11 @@ public sealed class OpenCodeConsoleGoClientTests
         });
         var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.AuthenticationRequired, result.Outcome);
         Assert.Equal(statusCode, result.StatusCode);
-        Assert.Empty(result.Workspaces);
-    }
-
-    [Fact]
-    public async Task FetchAsync_StaleAccountDoesNotHideValidAccount()
-    {
-        // Catches one revoked account aborting discovery before another account is checked.
-        var stale = new OpenCodeConsoleAccount("account-stale", "access-stale", null);
-        var handler = new StubHttpMessageHandler(request =>
-        {
-            if (request.Headers.Authorization?.Parameter == "access-stale")
-            {
-                return new HttpResponseMessage(HttpStatusCode.Unauthorized);
-            }
-
-            return request.RequestUri?.AbsolutePath.EndsWith("/orgs", StringComparison.Ordinal) == true
-                ? JsonResponse("[{\"id\":\"org-test\"}]")
-                : JsonResponse(ValidStatus);
-        });
-        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
-
-        OpenCodeConsoleFetchResult result = await client.FetchAsync(
-            [stale, Account],
-            CancellationToken.None);
-
-        Assert.Equal(OpenCodeConsoleFetchOutcome.Success, result.Outcome);
-        Assert.Single(result.Workspaces);
-        Assert.Equal(3, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task FetchAsync_TransientAccountFailureBlocksAutomaticSelection()
-    {
-        // Catches incomplete discovery being mistaken for exactly one eligible workspace.
-        var unavailable = new OpenCodeConsoleAccount("account-unavailable", "access-unavailable", null);
-        var handler = new StubHttpMessageHandler(request =>
-        {
-            if (request.Headers.Authorization?.Parameter == "access-unavailable")
-            {
-                return new HttpResponseMessage(HttpStatusCode.BadGateway);
-            }
-
-            return request.RequestUri?.AbsolutePath.EndsWith("/orgs", StringComparison.Ordinal) == true
-                ? JsonResponse("[{\"id\":\"org-test\"}]")
-                : JsonResponse(ValidStatus);
-        });
-        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
-
-        OpenCodeConsoleFetchResult result = await client.FetchAsync(
-            [unavailable, Account],
-            CancellationToken.None);
-
-        Assert.Equal(OpenCodeConsoleFetchOutcome.TransientFailure, result.Outcome);
-        Assert.Equal(HttpStatusCode.BadGateway, result.StatusCode);
-        Assert.Empty(result.Workspaces);
-    }
-
-    [Fact]
-    public async Task FetchAsync_BoundsConcurrentDiscoveryRequests()
-    {
-        // Catches valid multi-account discovery becoming fully serial or unbounded.
-        var handler = new ConcurrencyHandler();
-        var accounts = Enumerable.Range(0, 8)
-            .Select(index => new OpenCodeConsoleAccount($"account-{index}", $"access-{index}", null))
-            .ToImmutableArray();
-        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
-
-        OpenCodeConsoleFetchResult result = await client.FetchAsync(accounts, CancellationToken.None);
-
-        Assert.Equal(OpenCodeConsoleFetchOutcome.Success, result.Outcome);
-        Assert.Empty(result.Workspaces);
-        Assert.InRange(handler.MaximumConcurrentRequests, 2, 4);
-    }
-
-    [Fact]
-    public async Task FetchAsync_ConfiguredSelectorSkipsUnselectedStatusRequests()
-    {
-        // Catches explicit selection still probing every organization on every poll.
-        string selected = Selector(Account.AccountId, "org-selected");
-        string? requestedOrganization = null;
-        var handler = new StubHttpMessageHandler(request =>
-        {
-            if (request.RequestUri?.AbsolutePath.EndsWith("/orgs", StringComparison.Ordinal) == true)
-            {
-                return JsonResponse("[{\"id\":\"org-other\"},{\"id\":\"org-selected\"}]");
-            }
-
-            requestedOrganization = Assert.Single(request.Headers.GetValues("x-org-id"));
-            return JsonResponse(ValidStatus);
-        });
-        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
-
-        OpenCodeConsoleFetchResult result = await client.FetchAsync(
-            [Account],
-            CancellationToken.None,
-            selected);
-
-        Assert.Single(result.Workspaces);
-        Assert.Equal("org-selected", requestedOrganization);
-        Assert.Equal(2, handler.RequestCount);
+        Assert.Empty(result.Windows);
     }
 
     [Fact]
@@ -234,7 +141,7 @@ public sealed class OpenCodeConsoleGoClientTests
             Handler(new HttpResponseMessage(HttpStatusCode.NotFound)),
             SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.TransientFailure, result.Outcome);
         Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
@@ -247,7 +154,7 @@ public sealed class OpenCodeConsoleGoClientTests
         response.Headers.TryAddWithoutValidation("Retry-After", "120");
         var client = new OpenCodeConsoleGoClient(Handler(response), SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.RateLimited, result.Outcome);
         Assert.Equal(TimeSpan.FromMinutes(2), result.RetryAfter);
@@ -260,25 +167,10 @@ public sealed class OpenCodeConsoleGoClientTests
     {
         var client = new OpenCodeConsoleGoClient(Handler(JsonResponse(status)), SeverityFromPercent);
 
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
+        OpenCodeConsoleFetchResult result = await client.FetchAsync(Workspace, CancellationToken.None);
 
         Assert.Equal(OpenCodeConsoleFetchOutcome.InvalidResponse, result.Outcome);
-        Assert.Empty(result.Workspaces);
-    }
-
-    [Fact]
-    public async Task FetchAsync_RejectsUnboundedOrganizationLists()
-    {
-        string orgs = "[" + string.Join(
-            ',',
-            Enumerable.Range(0, 33).Select(index => $"{{\"id\":\"org-{index}\"}}")) + "]";
-        var handler = new StubHttpMessageHandler(_ => JsonResponse(orgs));
-        var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
-
-        OpenCodeConsoleFetchResult result = await client.FetchAsync([Account], CancellationToken.None);
-
-        Assert.Equal(OpenCodeConsoleFetchOutcome.InvalidResponse, result.Outcome);
-        Assert.Equal(1, handler.RequestCount);
+        Assert.Empty(result.Windows);
     }
 
     [Fact]
@@ -288,17 +180,14 @@ public sealed class OpenCodeConsoleGoClientTests
         var client = new OpenCodeConsoleGoClient(handler, SeverityFromPercent);
         using var cancellation = new CancellationTokenSource();
 
-        Task<OpenCodeConsoleFetchResult> fetch = client.FetchAsync([Account], cancellation.Token);
+        Task<OpenCodeConsoleFetchResult> fetch = client.FetchAsync(Workspace, cancellation.Token);
         await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(1));
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fetch);
     }
 
-    private static StubHttpMessageHandler Handler(HttpResponseMessage statusResponse) => new(request =>
-        request.RequestUri?.AbsolutePath.EndsWith("/orgs", StringComparison.Ordinal) == true
-            ? JsonResponse("[{\"id\":\"org-test\"}]")
-            : statusResponse);
+    private static StubHttpMessageHandler Handler(HttpResponseMessage response) => new(_ => response);
 
     private static void AssertWindow(UsageWindow window, string label, double percent, string resetsAt)
     {
@@ -306,10 +195,6 @@ public sealed class OpenCodeConsoleGoClientTests
         Assert.Equal(percent, window.Percent);
         Assert.Equal(DateTimeOffset.Parse(resetsAt), window.ResetsAt);
     }
-
-    private static string Selector(string accountId, string orgId) => Convert
-        .ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(accountId + "\0" + orgId)))
-        .ToLowerInvariant();
 
     private static Severity SeverityFromPercent(double? percent) =>
         SeverityPolicy.FromPercent(percent, 80, 95);
@@ -363,38 +248,6 @@ public sealed class OpenCodeConsoleGoClientTests
             Started.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new Xunit.Sdk.XunitException("Unreachable");
-        }
-    }
-
-    private sealed class ConcurrencyHandler : HttpMessageHandler
-    {
-        private int _activeRequests;
-        private int _maximumConcurrentRequests;
-
-        public int MaximumConcurrentRequests => _maximumConcurrentRequests;
-
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            int active = Interlocked.Increment(ref _activeRequests);
-            int observed;
-            do
-            {
-                observed = _maximumConcurrentRequests;
-            }
-            while (active > observed &&
-                Interlocked.CompareExchange(ref _maximumConcurrentRequests, active, observed) != observed);
-
-            try
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken);
-                return JsonResponse("[]");
-            }
-            finally
-            {
-                Interlocked.Decrement(ref _activeRequests);
-            }
         }
     }
 }

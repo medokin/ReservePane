@@ -29,8 +29,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             SeverityFromPercent,
             null,
             _ => throw new Xunit.Sdk.XunitException("Credential contents must not be read"),
-            () => null,
-            new StubAccountReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
+            new StubWorkspaceReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
             new StubConsoleClient(() => throw new Xunit.Sdk.XunitException("Console HTTP must not run")),
             path => path == "opencode-auth.json" && credentialExists,
             command => command == "opencode" && commandAvailable);
@@ -51,8 +50,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             SeverityFromPercent,
             null,
             _ => throw new Xunit.Sdk.XunitException("Credential contents must not be read"),
-            () => null,
-            new StubAccountReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
+            new StubWorkspaceReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
             new StubConsoleClient(() => throw new Xunit.Sdk.XunitException("Console HTTP must not run")),
             _ => throw new System.Security.SecurityException("credential-path-must-not-be-reported"),
             _ => throw new Xunit.Sdk.XunitException("Command discovery must not run"));
@@ -136,8 +134,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             SeverityFromPercent,
             null,
             OpenCodeGoProvider.OpenCredentialStream,
-            () => null,
-            new StubAccountReader(() => []),
+            new StubWorkspaceReader(() => null),
             new StubConsoleClient(() => throw new Xunit.Sdk.XunitException("Console HTTP must not run")));
 
         ProviderFetchResult result = await provider.FetchAsync(CancellationToken.None);
@@ -161,8 +158,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
 
         ProviderFetchResult result = await CreateConsoleProvider(
             handler,
-            null,
-            new StubAccountReader(() => []),
+            new StubWorkspaceReader(() => null),
             new StubConsoleClient(() => throw new Xunit.Sdk.XunitException("Console HTTP must not run")),
             credential).FetchAsync(CancellationToken.None);
 
@@ -352,13 +348,12 @@ public sealed class OpenCodeGoProviderTests : IDisposable
     {
         // Catches automatic Console discovery replacing the stable API-key contract.
         var handler = new StubHttpMessageHandler(_ => JsonResponse(ReadFixture("opencode-go-usage.json")));
-        var accountReader = new StubAccountReader(() => throw new Xunit.Sdk.XunitException(
+        var accountReader = new StubWorkspaceReader(() => throw new Xunit.Sdk.XunitException(
             "Console discovery must not run when an API key is configured."));
         var consoleClient = new StubConsoleClient(() => throw new Xunit.Sdk.XunitException(
             "Console HTTP must not run when an API key is configured."));
         OpenCodeGoProvider provider = CreateConsoleProvider(
             handler,
-            null,
             accountReader,
             consoleClient,
             credential: """
@@ -382,8 +377,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             SeverityFromPercent,
             null,
             OpenCodeGoProvider.OpenCredentialStream,
-            () => null,
-            new StubAccountReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
+            new StubWorkspaceReader(() => throw new Xunit.Sdk.XunitException("Accounts must not be read")),
             new StubConsoleClient(() => throw new Xunit.Sdk.XunitException("Console HTTP must not run")),
             _ => false,
             _ => false);
@@ -395,73 +389,57 @@ public sealed class OpenCodeGoProviderTests : IDisposable
     }
 
     [Fact]
-    public async Task FetchAsync_NoApiKeyAndNoConsoleSettings_DiscoversOneWorkspaceUsage()
+    public async Task FetchAsync_NoApiKey_UsesActiveWorkspaceUsage()
     {
         // Catches automatic Console discovery requiring a persisted settings object.
-        var workspace = new OpenCodeConsoleWorkspace(
-            new string('a', 64),
-            [new UsageWindow("rolling", 42, DateTimeOffset.Parse("2026-08-27T12:00:00Z"), Severity.Normal)]);
+        ImmutableArray<UsageWindow> windows =
+            [new("rolling", 42, DateTimeOffset.Parse("2026-08-27T12:00:00Z"), Severity.Normal)];
         OpenCodeGoProvider provider = CreateConsoleProvider(
             new StubHttpMessageHandler(_ => throw new Xunit.Sdk.XunitException("API-key HTTP must not run")),
-            null,
-            new StubAccountReader(() => [ConsoleAccount()]),
+            new StubWorkspaceReader(() => ConsoleWorkspace()),
             new StubConsoleClient(() => new OpenCodeConsoleFetchResult(
                 OpenCodeConsoleFetchOutcome.Success,
-                [workspace])));
+                windows)));
 
         ProviderFetchResult result = await provider.FetchAsync(CancellationToken.None);
         ProviderSnapshot snapshot = Assert.IsType<ProviderSnapshot>(result.Snapshot);
 
         Assert.Equal(ProviderFetchOutcome.Success, result.Outcome);
         Assert.Equal(HealthState.Ok, snapshot.Health);
-        Assert.Equal(workspace.Windows, snapshot.Windows);
+        Assert.Equal(windows, snapshot.Windows);
     }
 
     [Fact]
-    public async Task FetchAsync_MultipleConsoleWorkspacesRequireMatchingSelector()
+    public async Task FetchAsync_UsesCurrentWorkspaceOnEveryFetch()
     {
-        var first = new OpenCodeConsoleWorkspace(
-            new string('a', 64),
-            [new UsageWindow("rolling", 10, null, Severity.Normal)]);
-        var second = new OpenCodeConsoleWorkspace(
-            new string('b', 64),
-            [new UsageWindow("rolling", 20, null, Severity.Normal)]);
+        OpenCodeConsoleActiveWorkspace workspace = ConsoleWorkspace();
+        int request = 0;
         var client = new StubConsoleClient(() => new OpenCodeConsoleFetchResult(
             OpenCodeConsoleFetchOutcome.Success,
-            [first, second]));
-
-        ProviderFetchResult unselected = await CreateConsoleProvider(
+            [new UsageWindow("rolling", ++request == 1 ? 10 : 20, null, Severity.Normal)]));
+        OpenCodeGoProvider provider = CreateConsoleProvider(
             new StubHttpMessageHandler(_ => throw new Xunit.Sdk.XunitException("Unexpected HTTP")),
-            null,
-            new StubAccountReader(() => [ConsoleAccount()]),
-            client).FetchAsync(CancellationToken.None);
-        ProviderFetchResult selected = await CreateConsoleProvider(
-            new StubHttpMessageHandler(_ => throw new Xunit.Sdk.XunitException("Unexpected HTTP")),
-            second.Selector,
-            new StubAccountReader(() => [ConsoleAccount()]),
-            client).FetchAsync(CancellationToken.None);
+            new StubWorkspaceReader(() => workspace), client);
 
-        ProviderSnapshot selectionRequired = Assert.IsType<ProviderSnapshot>(unselected.Snapshot);
-        Assert.Equal(ProviderFetchOutcome.NotConfigured, unselected.Outcome);
-        Assert.Contains(
-            "Providers.opencode-go.OpenCodeConsole.WorkspaceSelector",
-            selectionRequired.Error,
-            StringComparison.Ordinal);
-        Assert.Contains(first.Selector, selectionRequired.Error, StringComparison.Ordinal);
-        Assert.Contains(second.Selector, selectionRequired.Error, StringComparison.Ordinal);
-        Assert.Equal(second.Windows, Assert.IsType<ProviderSnapshot>(selected.Snapshot).Windows);
+        ProviderSnapshot first = await provider.FetchSnapshotAsync(CancellationToken.None);
+        workspace = workspace with { AccountId = "account-next", OrganizationId = "org-next", AccessToken = "access-next" };
+        ProviderSnapshot second = await provider.FetchSnapshotAsync(CancellationToken.None);
+
+        Assert.Equal(10, Assert.Single(first.Windows).Percent);
+        Assert.Equal(20, Assert.Single(second.Windows).Percent);
+        Assert.Equal(["org-test", "org-next"], client.Workspaces.Select(item => item.OrganizationId));
+        Assert.Equal(["access-test", "access-next"], client.Workspaces.Select(item => item.AccessToken));
     }
 
     [Fact]
-    public async Task FetchAsync_ExpiredConsoleAccountsReturnAuthenticationRequiredWithoutHttp()
+    public async Task FetchAsync_ExpiredActiveWorkspaceReturnsAuthenticationRequiredWithoutHttp()
     {
-        var expired = ConsoleAccount() with { ExpiresAt = DateTimeOffset.Parse("2026-08-26T00:00:00Z") };
+        var expired = ConsoleWorkspace() with { ExpiresAt = DateTimeOffset.Parse("2026-08-26T00:00:00Z") };
         var client = new StubConsoleClient(() => throw new Xunit.Sdk.XunitException(
             "Expired Console tokens must not be sent."));
         OpenCodeGoProvider provider = CreateConsoleProvider(
             new StubHttpMessageHandler(_ => throw new Xunit.Sdk.XunitException("Unexpected HTTP")),
-            null,
-            new StubAccountReader(() => [expired]),
+            new StubWorkspaceReader(() => expired),
             client);
 
         ProviderFetchResult result = await provider.FetchAsync(CancellationToken.None);
@@ -481,8 +459,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             HttpStatusCode.NotFound));
         OpenCodeGoProvider provider = CreateConsoleProvider(
             new StubHttpMessageHandler(_ => throw new Xunit.Sdk.XunitException("Unexpected HTTP")),
-            null,
-            new StubAccountReader(() => [ConsoleAccount()]),
+            new StubWorkspaceReader(() => ConsoleWorkspace()),
             client);
 
         ProviderFetchResult result = await provider.FetchAsync(CancellationToken.None);
@@ -490,6 +467,51 @@ public sealed class OpenCodeGoProviderTests : IDisposable
         Assert.Equal(ProviderFetchOutcome.TransientFailure, result.Outcome);
         Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
         Assert.Null(result.Snapshot);
+    }
+
+    [Theory]
+    [InlineData("workspace")]
+    [InlineData("account")]
+    [InlineData("token")]
+    public async Task FetchAsync_WorkspaceChangeClearsRetainedUsageOnFailure(string change)
+    {
+        OpenCodeConsoleActiveWorkspace workspace = ConsoleWorkspace() with { ExpiresAt = null };
+        int request = 0;
+        var provider = new OpenCodeGoProvider(
+            _directory.WriteFile("workspace-switch-auth.json", "{}"),
+            new StubHttpMessageHandler(_ => throw new InvalidOperationException("Unexpected HTTP")),
+            SeverityFromPercent,
+            null,
+            OpenCodeGoProvider.OpenCredentialStream,
+            new StubWorkspaceReader(() => workspace),
+            new StubConsoleClient(() => ++request == 1
+                ? new OpenCodeConsoleFetchResult(OpenCodeConsoleFetchOutcome.Success,
+                    [new UsageWindow("rolling", 25, null, Severity.Normal)])
+                : new OpenCodeConsoleFetchResult(OpenCodeConsoleFetchOutcome.TransientFailure, [])),
+            File.Exists,
+            _ => true);
+        var poller = new StatusPoller(
+            [provider], () => AppSettings.Default,
+            new RollingFileLog(Path.Combine(_directory.Path, "switch-log.txt")));
+
+        ProviderSnapshot first = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+        workspace = change switch
+        {
+            "workspace" => workspace with { OrganizationId = "org-next" },
+            "account" => workspace with { AccountId = "account-next" },
+            _ => workspace with { AccessToken = "access-refreshed" },
+        };
+        ProviderSnapshot second = Assert.Single((await poller.PollOnceAsync(CancellationToken.None)).Providers);
+
+        Assert.Equal(25, Assert.Single(first.Windows).Percent);
+        if (change == "token")
+        {
+            Assert.Equal(25, Assert.Single(second.Windows).Percent);
+        }
+        else
+        {
+            Assert.Empty(second.Windows);
+        }
     }
 
     public void Dispose() => _directory.Dispose();
@@ -513,8 +535,7 @@ public sealed class OpenCodeGoProviderTests : IDisposable
 
     private OpenCodeGoProvider CreateConsoleProvider(
         HttpMessageHandler handler,
-        string? workspaceSelector,
-        IOpenCodeConsoleAccountReader accountReader,
+        IOpenCodeConsoleActiveWorkspaceReader workspaceReader,
         IOpenCodeConsoleGoClient consoleClient,
         string credential = "{}")
     {
@@ -525,16 +546,16 @@ public sealed class OpenCodeGoProviderTests : IDisposable
             SeverityFromPercent,
             new FixedTimeProvider(DateTimeOffset.Parse("2026-08-27T00:00:00Z")),
             OpenCodeGoProvider.OpenCredentialStream,
-            () => workspaceSelector,
-            accountReader,
+            workspaceReader,
             consoleClient,
             File.Exists,
             command => command == "opencode");
     }
 
-    private static OpenCodeConsoleAccount ConsoleAccount() => new(
+    private static OpenCodeConsoleActiveWorkspace ConsoleWorkspace() => new(
         "account-test",
         "access-test",
+        "org-test",
         DateTimeOffset.Parse("2026-08-28T00:00:00Z"));
 
     private static Severity SeverityFromPercent(double? percent) =>
@@ -609,20 +630,26 @@ public sealed class OpenCodeGoProviderTests : IDisposable
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
-    private sealed class StubAccountReader(Func<ImmutableArray<OpenCodeConsoleAccount>> read)
-        : IOpenCodeConsoleAccountReader
+    private sealed class StubWorkspaceReader(Func<OpenCodeConsoleActiveWorkspace?> read)
+        : IOpenCodeConsoleActiveWorkspaceReader
     {
-        public Task<ImmutableArray<OpenCodeConsoleAccount>> ReadAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(read());
+        public Task<OpenCodeConsoleActiveWorkspaceReadResult> ReadAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(new OpenCodeConsoleActiveWorkspaceReadResult(
+                OpenCodeConsoleActiveWorkspaceReadOutcome.Success, read()));
     }
 
     private sealed class StubConsoleClient(Func<OpenCodeConsoleFetchResult> fetch)
         : IOpenCodeConsoleGoClient
     {
+        public List<OpenCodeConsoleActiveWorkspace> Workspaces { get; } = [];
+
         public Task<OpenCodeConsoleFetchResult> FetchAsync(
-            ImmutableArray<OpenCodeConsoleAccount> accounts,
-            CancellationToken cancellationToken,
-            string? workspaceSelector = null) => Task.FromResult(fetch());
+            OpenCodeConsoleActiveWorkspace workspace,
+            CancellationToken cancellationToken)
+        {
+            Workspaces.Add(workspace);
+            return Task.FromResult(fetch());
+        }
     }
 
     private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider

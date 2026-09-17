@@ -396,12 +396,29 @@ public sealed class ClaudeProvider : IStatusProvider, IProviderAvailability
     {
         if (TryGetObject(root, "spend") is not JsonElement spend ||
             TryGetObject(spend, "used") is not JsonElement used ||
-            TryGetDecimal(used, "amount_minor") is not decimal amountMinor ||
-            TryGetString(used, "currency") is not string currency ||
-            TryGetInt32(used, "exponent") is not int exponent ||
-            exponent is < 0 or > 28)
+            ReadMoney(used) is not string amount)
         {
             return [];
+        }
+
+        string budget = !spend.TryGetProperty("limit", out JsonElement limit) || limit.ValueKind == JsonValueKind.Null
+            ? "no cap set"
+            : ReadMoney(limit) ?? "Unavailable";
+        return [new InfoLine("Spend", amount), new InfoLine("Budget", budget)];
+    }
+
+    private static string? ReadMoney(JsonElement money)
+    {
+        if (!TryGetProperty(money, "amount_minor", out JsonElement amountElement) ||
+            amountElement.ValueKind != JsonValueKind.Number ||
+            !amountElement.TryGetDecimal(out decimal amountMinor) ||
+            TryGetString(money, "currency") is not string currency ||
+            !TryGetProperty(money, "exponent", out JsonElement exponentElement) ||
+            exponentElement.ValueKind != JsonValueKind.Number ||
+            !exponentElement.TryGetInt32(out int exponent) ||
+            exponent is < 0 or > 28)
+        {
+            return null;
         }
 
         decimal divisor = 1;
@@ -411,11 +428,7 @@ public sealed class ClaudeProvider : IStatusProvider, IProviderAvailability
         }
 
         string amount = (amountMinor / divisor).ToString($"F{exponent}", CultureInfo.InvariantCulture);
-        bool hasCap = spend.TryGetProperty("limit", out JsonElement limit) && limit.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined;
-        string value = hasCap
-            ? $"{currency} {amount} this cycle"
-            : $"{currency} {amount} this cycle (no cap set)";
-        return [new InfoLine("Extra usage", value)];
+        return $"{currency} {amount}";
     }
 
     private static bool IsAuthExpired(HttpStatusCode statusCode) =>
@@ -445,20 +458,6 @@ public sealed class ClaudeProvider : IStatusProvider, IProviderAvailability
         element.ValueKind == JsonValueKind.Object &&
         element.TryGetProperty(propertyName, out JsonElement value) &&
         value.TryGetDouble(out double result)
-            ? result
-            : null;
-
-    private static decimal? TryGetDecimal(JsonElement element, string propertyName) =>
-        element.ValueKind == JsonValueKind.Object &&
-        element.TryGetProperty(propertyName, out JsonElement value) &&
-        value.TryGetDecimal(out decimal result)
-            ? result
-            : null;
-
-    private static int? TryGetInt32(JsonElement element, string propertyName) =>
-        element.ValueKind == JsonValueKind.Object &&
-        element.TryGetProperty(propertyName, out JsonElement value) &&
-        value.TryGetInt32(out int result)
             ? result
             : null;
 

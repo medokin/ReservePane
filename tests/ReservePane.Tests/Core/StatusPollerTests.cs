@@ -1430,29 +1430,30 @@ public sealed class StatusPollerTests : IDisposable
         poller.ReportUpdated += (_, _) =>
         {
             handlerStarted.TrySetResult();
-            releaseHandler.Wait(TimeSpan.FromSeconds(1));
+            releaseHandler.Wait();
             handlerCompleted.TrySetResult();
         };
         using var cancellation = new CancellationTokenSource();
         Task run = poller.RunAsync(cancellation.Token);
         RecordingTimer cadence = await time.WaitForTimerAsync(TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
 
-        poller.RequestRefresh();
-        await handlerStarted.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
-        cancellation.Cancel();
-
         try
         {
-            await cadence.Disposed.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
+            poller.RequestRefresh();
+            await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            cancellation.Cancel();
+
+            await cadence.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(run.IsCompleted);
         }
         finally
         {
+            cancellation.Cancel();
             releaseHandler.Set();
+            await run.WaitAsync(TimeSpan.FromSeconds(5));
         }
 
-        await run.WaitAsync(TimeSpan.FromMilliseconds(300));
-        await handlerCompleted.Task.WaitAsync(TimeSpan.FromMilliseconds(300));
+        await handlerCompleted.Task.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

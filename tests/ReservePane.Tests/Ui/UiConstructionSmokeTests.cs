@@ -111,8 +111,12 @@ public sealed class UiConstructionSmokeTests
         Assert.DoesNotContain(visibleText, text => text.Contains("organization", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public void ProviderCard_OllamaMaxSnapshotRendersEstimatedBudgetAtPopupWidth()
+    [Theory]
+    [InlineData("ollama", "Ollama Cloud", "Max", "Estimated spend", "USD 112.50", "USD 300.00")]
+    [InlineData("claude", "Claude", "team_standard", "Spend", "EUR 123.45", "EUR 1000.00")]
+    [InlineData("claude", "Claude", "team_standard", "Spend", "EUR 322.52", "no cap set")]
+    public void ProviderCard_SpendAndBudgetRenderAtPopupWidth(
+        string id, string label, string plan, string spendLabel, string spend, string budget)
     {
         // Catches missing budget metadata or overlapping labels and values at the narrow card width.
         Exception? failure = null;
@@ -122,9 +126,9 @@ public sealed class UiConstructionSmokeTests
             {
                 var card = new ProviderCard
                 {
-                    Snapshot = new ProviderSnapshot("ollama", "Ollama Cloud", HealthState.Ok, "Max",
+                    Snapshot = new ProviderSnapshot(id, label, HealthState.Ok, plan,
                         [new UsageWindow("Monthly", 37.5, null, Severity.Normal)],
-                        [new InfoLine("Estimated spend", "USD 112.50"), new InfoLine("Budget", "USD 300.00")],
+                        [new InfoLine(spendLabel, spend), new InfoLine("Budget", budget)],
                         null, DateTimeOffset.UtcNow, 0),
                 };
                 card.Measure(new Size(327, double.PositiveInfinity));
@@ -133,15 +137,15 @@ public sealed class UiConstructionSmokeTests
 
                 TextBlock[] blocks = Descendants<TextBlock>(card).ToArray();
                 Rect cardBounds = new(0, 0, 327, card.ActualHeight);
-                foreach ((string label, string value) in new[]
+                foreach ((string rowLabel, string value) in new[]
                     {
-                        ("Ollama Cloud", "Max"),
+                        (label, plan),
                         ("Monthly", "37.5%"),
-                        ("Estimated spend", "USD 112.50"),
-                        ("Budget", "USD 300.00"),
+                        (spendLabel, spend),
+                        ("Budget", budget),
                     })
                 {
-                    TextBlock labelBlock = Assert.Single(blocks, block => block.Text == label);
+                    TextBlock labelBlock = Assert.Single(blocks, block => block.Text == rowLabel);
                     TextBlock valueBlock = Assert.Single(blocks, block => block.Text == value);
                     Assert.Equal(Visibility.Visible, labelBlock.Visibility);
                     Assert.Equal(Visibility.Visible, valueBlock.Visibility);
@@ -149,9 +153,9 @@ public sealed class UiConstructionSmokeTests
                         .TransformBounds(new Rect(new Point(), labelBlock.RenderSize));
                     Rect valueBounds = valueBlock.TransformToAncestor(card)
                         .TransformBounds(new Rect(new Point(), valueBlock.RenderSize));
-                    Assert.True(cardBounds.Contains(labelBounds), $"The {label} label extends outside the card.");
+                    Assert.True(cardBounds.Contains(labelBounds), $"The {rowLabel} label extends outside the card.");
                     Assert.True(cardBounds.Contains(valueBounds), $"The {value} value extends outside the card.");
-                    Assert.True(labelBounds.Right < valueBounds.Left, $"The {label} label overlaps its value.");
+                    Assert.True(labelBounds.Right < valueBounds.Left, $"The {rowLabel} label overlaps its value.");
                 }
             }
             catch (Exception exception)

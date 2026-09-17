@@ -238,8 +238,9 @@ public async Task FetchAsync_MapsLimitsAndUncappedSpend()
             Assert.Equal(95d, weekly.Percent);
             Assert.Equal(Severity.Critical, weekly.Severity);
         });
-    Assert.Contains(snapshot.Info, line =>
-        line.Label == "Extra usage" && line.Value == "EUR 322.52 this cycle (no cap set)");
+    Assert.Collection(snapshot.Info,
+        line => Assert.Equal(new InfoLine("Spend", "EUR 322.52"), line),
+        line => Assert.Equal(new InfoLine("Budget", "no cap set"), line));
 }
 
 [Fact]

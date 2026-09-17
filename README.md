@@ -142,7 +142,9 @@ delays still apply, including after switching workspaces.
 ReservePane reads the OpenCode account database through the read-only
 `opencode db` command and keeps identifiers and access tokens in memory only.
 Console monitoring uses OpenCode's private contract and fails safely if the
-unsupported contract changes. Company Seat values show the member's budget.
+unsupported contract changes. Company Seat values show the member's spend and
+budget in USD, converting 1,000,000 microcents per cent and rounding to the nearest
+cent. Utilization is calculated from the unrounded amounts.
 
 Legacy `Providers` configuration, including `OpenCodeConsole` and
 `WorkspaceSelector`, is ignored and removed on the next settings save. Other

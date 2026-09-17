@@ -10,7 +10,7 @@ namespace ReservePane.Providers;
 
 public sealed class OpenCodeCompanySeatProvider : IStatusProvider, IRetentionScopedStatusProvider, IProviderAvailability
 {
-    private static readonly BigInteger MicroCentsPerCent = new(100_000);
+    private static readonly BigInteger MicroCentsPerCent = new(1_000_000);
     private const int PercentageScale = 1_000_000;
 
     private readonly Func<double?, Severity> _severityFromPercent;

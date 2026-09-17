@@ -21,7 +21,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | LIVE-03 | Ollama Cloud uses the existing CLI sign-in; monthly usage matches the dashboard percentage to the provider's precision, and legacy session/weekly quotas still appear when returned. |  |  |  |
 | LIVE-04 | Initial Grok card shows the live plan label and every returned usage window. |  |  |  |
 | LIVE-05 | Without an `opencode-go` API key, OpenCode Go follows the active Console account and workspace; switching either takes effect on the next poll. |  |  |  |
-| LIVE-06 | OpenCode Company Seat follows the active Console account and workspace and displays the member's budget. |  |  |  |
+| LIVE-06 | OpenCode Company Seat follows the active Console account and workspace; member spend and budget in USD match Console, including a $200 budget, and utilization matches the unrounded amounts. |  |  |  |
 | LIVE-07 | A configured `opencode-go` API key takes precedence over Console discovery for Go. |  |  |  |
 | TRAY-01 | Tray is green when every reachable provider is below the warning threshold. |  |  |  |
 | TRAY-02 | Tray is amber at the warning threshold. |  |  |  |

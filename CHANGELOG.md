@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/medokin/ReservePane/compare/v0.6.0...v0.7.0) (2026-09-17)
+
+
+### Features
+
+* **claude:** show spend and budget separately ([#58](https://github.com/medokin/ReservePane/issues/58)) ([cacb2b4](https://github.com/medokin/ReservePane/commit/cacb2b4145977022eb54621c8b0e9c5e4932fa0a))
+
 ## [0.6.0](https://github.com/medokin/ReservePane/compare/v0.5.0...v0.6.0) (2026-09-17)
 
 

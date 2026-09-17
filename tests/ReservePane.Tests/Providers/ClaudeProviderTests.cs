@@ -89,8 +89,53 @@ public sealed class ClaudeProviderTests : IDisposable
                 Assert.Equal(95d, weekly.Percent);
                 Assert.Equal(Severity.Critical, weekly.Severity);
             });
-        Assert.Contains(snapshot.Info, line =>
-            line.Label == "Extra usage" && line.Value == "EUR 322.52 this cycle (no cap set)");
+        Assert.Collection(snapshot.Info,
+            line => Assert.Equal(new InfoLine("Spend", "EUR 322.52"), line),
+            line => Assert.Equal(new InfoLine("Budget", "no cap set"), line));
+    }
+
+    [Fact]
+    public async Task FetchAsync_MapsCappedSpendAndBudget()
+    {
+        var handler = new StubHttpMessageHandler(request => JsonResponse(
+            request.RequestUri!.AbsolutePath.EndsWith("usage", StringComparison.Ordinal)
+                ? ReadFixture("claude-usage-capped.json")
+                : ReadFixture("claude-profile.json")));
+
+        ProviderFetchResult result = await CreateProvider(handler).FetchAsync(CancellationToken.None);
+
+        Assert.Equal(ProviderFetchOutcome.Success, result.Outcome);
+        Assert.Collection(result.Snapshot!.Info,
+            line => Assert.Equal(new InfoLine("Spend", "EUR 123.45"), line),
+            line => Assert.Equal(new InfoLine("Budget", "EUR 1000.00"), line));
+        Assert.Equal(2, result.Snapshot.Windows.Length);
+    }
+
+    [Theory]
+    [InlineData("{\"amount_minor\":0,\"currency\":\"USD\",\"exponent\":2}", "USD 0.00")]
+    [InlineData("{\"amount_minor\":5000,\"currency\":\"JPY\",\"exponent\":0}", "JPY 5000")]
+    [InlineData("{\"amount_minor\":12345,\"currency\":\"KWD\",\"exponent\":3}", "KWD 12.345")]
+    [InlineData("{}", "Unavailable")]
+    [InlineData("false", "Unavailable")]
+    [InlineData("{\"amount_minor\":\"invalid\",\"currency\":\"EUR\",\"exponent\":2}", "Unavailable")]
+    [InlineData("{\"amount_minor\":100,\"currency\":\"EUR\",\"exponent\":\"invalid\"}", "Unavailable")]
+    [InlineData("{\"amount_minor\":100,\"currency\":\"EUR\",\"exponent\":-1}", "Unavailable")]
+    [InlineData("{\"amount_minor\":100,\"currency\":\"EUR\",\"exponent\":29}", "Unavailable")]
+    public async Task FetchAsync_BudgetUsesItsOwnMoneyFieldsAndPreservesSpend(string limitJson, string budget)
+    {
+        string usage = ReadFixture("claude-usage.json").Replace("\"limit\": null", $"\"limit\": {limitJson}");
+        var handler = new StubHttpMessageHandler(request => JsonResponse(
+            request.RequestUri!.AbsolutePath.EndsWith("usage", StringComparison.Ordinal)
+                ? usage
+                : ReadFixture("claude-profile.json")));
+
+        ProviderFetchResult result = await CreateProvider(handler).FetchAsync(CancellationToken.None);
+
+        Assert.Equal(ProviderFetchOutcome.Success, result.Outcome);
+        Assert.Collection(result.Snapshot!.Info,
+            line => Assert.Equal(new InfoLine("Spend", "EUR 322.52"), line),
+            line => Assert.Equal(new InfoLine("Budget", budget), line));
+        Assert.Equal(2, result.Snapshot.Windows.Length);
     }
 
     [Fact]
@@ -978,9 +1023,9 @@ public sealed class ClaudeProviderTests : IDisposable
             snapshot.Windows,
             session => Assert.Equal("session", session.Label),
             weekly => Assert.Equal("weekly", weekly.Label));
-        Assert.Contains(
-            snapshot.Info,
-            line => line.Label == "Extra usage" && line.Value == "EUR 322.52 this cycle (no cap set)");
+        Assert.Collection(snapshot.Info,
+            line => Assert.Equal(new InfoLine("Spend", "EUR 322.52"), line),
+            line => Assert.Equal(new InfoLine("Budget", "no cap set"), line));
     }
 
     private static string ReadFixture(string fileName) =>

@@ -189,7 +189,7 @@ Two invariants the UI must respect:
 
 1. `Windows` may be empty. Ollama always is.
 2. Money appears only as an `InfoLine`, never as a `UsageWindow`, because it has
-   no denominator. Rendered as `EUR 322.52 this cycle (no cap set)`.
+   no denominator. Rendered as `Spend: EUR 322.52` and `Budget: no cap set`.
 
 `Severity` derives from `Percent` unless the vendor supplies its own severity, in
 which case the vendor's value wins.

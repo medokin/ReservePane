@@ -23,6 +23,7 @@ Use this checklist for every Windows x64 release candidate. Record `PASS`, `FAIL
 | LIVE-05 | Without an `opencode-go` API key, OpenCode Go follows the active Console account and workspace; switching either takes effect on the next poll. |  |  |  |
 | LIVE-06 | OpenCode Company Seat follows the active Console account and workspace; member spend and budget in USD match Console, including a $200 budget, and utilization matches the unrounded amounts. |  |  |  |
 | LIVE-07 | A configured `opencode-go` API key takes precedence over Console discovery for Go. |  |  |  |
+| CLAUDE-01 | Claude shows separate Spend and Budget rows for the current cycle in the popup and overlay; capped amounts match the returned currency and precision, uncapped accounts show `no cap set`, and an unreadable cap shows `Unavailable` without losing spend or usage windows. |  |  |  |
 | TRAY-01 | Tray is green when every reachable provider is below the warning threshold. |  |  |  |
 | TRAY-02 | Tray is amber at the warning threshold. |  |  |  |
 | TRAY-03 | Tray is red at the critical threshold. |  |  |  |

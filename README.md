@@ -68,6 +68,17 @@ card keeps the last result and its original update time. Longer retry delays
 still apply. Other providers keep the configured polling cadence, which defaults
 to 60 seconds.
 
+Claude extra usage appears as separate **Spend** and **Budget** rows for the
+current cycle. Both amounts use the currency and decimal precision returned by
+Claude. Uncapped accounts show **Budget: no cap set**; an unreadable cap shows
+**Budget: Unavailable** while preserving valid spend and usage windows.
+
+<img src="docs/images/claude-budget.png"
+     alt="Claude Spend and Budget rows for capped and uncapped mocked accounts in the popup and overlay"
+     width="800">
+
+*Claude popup and overlay shown with mocked provider data.*
+
 Polling uses only allowlisted usage and account metadata endpoints. The HTTP
 transport rejects inference requests before sending them, so polling does not
 consume model tokens. Credential checks use `claude auth status` and read-only

@@ -1,0 +1,25 @@
+{
+  "limits": [
+    {
+      "kind": "session",
+      "group": "session",
+      "percent": 25,
+      "severity": "normal",
+      "resets_at": "2026-09-17T19:00:00Z"
+    },
+    {
+      "kind": "weekly_all",
+      "group": "weekly",
+      "percent": 50,
+      "severity": "normal",
+      "resets_at": "2026-09-20T01:00:00Z"
+    }
+  ],
+  "spend": {
+    "used": { "amount_minor": 12345, "currency": "EUR", "exponent": 2 },
+    "limit": { "amount_minor": 100000, "currency": "EUR", "exponent": 2 },
+    "percent": 12,
+    "severity": "normal",
+    "enabled": true
+  }
+}
